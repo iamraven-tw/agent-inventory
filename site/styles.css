@@ -272,6 +272,39 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(20px); z-index: 90; padding: 12px 18px; background: var(--ink); color: var(--paper); border-radius: 8px; font-size: 13.5px; opacity: 0; transition: all .3s var(--ease); pointer-events: none; max-width: min(640px, calc(100% - 32px)); }
 .toast.is-on { opacity: 1; transform: translateX(-50%); }
 
+/* ---------------------------------------------------------------- 流程圖 */
+.flow { margin-bottom: 4px; }
+.flow__box { margin: 4px 0 10px; padding: 14px 12px; border: 1px solid var(--rule); border-radius: 8px; background: rgba(255,255,255,.45); overflow: auto; max-height: 520px; }
+.flow__box svg { height: auto; display: block; margin: 0 auto; }
+.flow__loading, .flow__err { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+.flow__err { color: var(--accent); margin-bottom: 6px; }
+.flow__src { font-family: var(--mono); font-size: 11px; line-height: 1.55; color: var(--ink-2); white-space: pre; overflow-x: auto; margin: 0; }
+.flow__legend { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--ink-2); margin-bottom: 10px; }
+.flow__legend .btn--small { margin-left: auto; }
+.flow__legend .btn--small + .btn--small { margin-left: 0; }
+.swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.swatch--agent { background: #EDE6D8; border: 1px solid #8A8072; }
+.swatch--human { background: #EFDCD5; border: 1.5px solid var(--accent); }
+.flow__gates { margin: 0 0 18px; padding-left: 20px; font-size: 13px; color: var(--ink-2); line-height: 1.7; }
+.flow__gates li { margin-bottom: 3px; }
+.flow__gates li::marker { color: var(--accent); font-family: var(--mono); font-size: 11px; }
+.flow-edit { width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 12px; line-height: 1.6; padding: 10px 12px; border: 1px solid var(--rule-strong); border-radius: 6px; background: rgba(255,255,255,.5); min-height: 160px; resize: vertical; white-space: pre; }
+
+/* ---------------------------------------------------------------- 放大檢視 */
+.lightbox { position: fixed; inset: 0; z-index: 85; visibility: hidden; display: grid; place-items: center; }
+.lightbox[aria-hidden="false"] { visibility: visible; }
+.lightbox__scrim { position: absolute; inset: 0; background: rgba(30,26,21,.45); opacity: 0; transition: opacity .25s var(--ease); }
+.lightbox[aria-hidden="false"] .lightbox__scrim { opacity: 1; }
+.lightbox__panel { position: relative; width: min(1100px, calc(100% - 40px)); max-height: 90vh; display: flex; flex-direction: column;
+  background: var(--paper); border: 1px solid var(--rule-strong); border-radius: 10px; box-shadow: 0 40px 90px -40px rgba(30,26,21,.6);
+  opacity: 0; transform: scale(.98); transition: all .25s var(--ease); }
+.lightbox[aria-hidden="false"] .lightbox__panel { opacity: 1; transform: none; }
+.lightbox__bar { display: flex; align-items: center; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--rule); }
+.lightbox__title { font-family: var(--serif); font-size: 20px; font-weight: 500; }
+.lightbox__bar .flow__legend { margin: 0; }
+.lightbox__body { padding: 22px; overflow: auto; }
+.lightbox__body svg { height: auto; display: block; margin: 0 auto; }
+
 /* ---------------------------------------------------------------- 編輯器 */
 .editor { position: fixed; inset: 0; z-index: 70; background: var(--paper); display: flex; flex-direction: column; visibility: hidden; opacity: 0; transform: translateY(8px); transition: all .25s var(--ease); }
 .editor[aria-hidden="false"] { visibility: visible; opacity: 1; transform: none; }

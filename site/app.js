@@ -121,7 +121,13 @@
     });
     $("#drawerClose").addEventListener("click", closeDrawer);
     $("#drawerScrim").addEventListener("click", closeDrawer);
-    document.addEventListener("keydown", (e) => { if (e.key === "Escape") { if (ed.open) closeEditor(false); else if ($("#modal").getAttribute("aria-hidden") === "false") closeModal(); else closeDrawer(); } });
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      if (ed.open) return closeEditor(false);
+      if ($("#lightbox").getAttribute("aria-hidden") === "false") return closeLightbox();
+      if ($("#modal").getAttribute("aria-hidden") === "false") return closeModal();
+      closeDrawer();
+    });
   }
 
   // ---------------------------------------------------------------- 篩選
@@ -251,6 +257,7 @@
       h("div", { class: "d-kicker" }, KIND[it.kind], it.tag && h("span", {}, "· " + it.tag), it.source !== "user" && h("span", {}, "· " + (SOURCE[it.source] || it.source)), h("span", {}, "· " + (it.scope === "global" ? "全域" : "專案")), it.project && h("span", { class: "mono" }, it.project)),
       h("h2", { class: `d-title ${it.kind === "rule" ? "mono" : ""}` }, it.name),
       summaryEditable(it),
+      it.kind === "skill" && flowBlock(it),   // 使用者要求：流程圖就放在摘要下方
       it.description && it.summarySource !== "frontmatter" && it.kind !== "note" && [h("div", { class: "d-h" }, "frontmatter description"), h("div", { class: "d-desc" }, it.description)],
       it.trigger && [h("div", { class: "d-h" }, "觸發 / 套用條件"), h("div", { class: "d-desc mono" }, it.trigger)],
       it.imports?.length ? [h("div", { class: "d-h" }, "引用"), h("div", { class: "d-desc mono" }, it.imports.join("、"))] : null,
@@ -369,6 +376,127 @@
     return fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "X-Requested-With": "agent-inventory" }, body: JSON.stringify(payload) })
       .then((r) => r.json()).catch((e) => ({ ok: false, error: "連不到 serve.py：" + e.message }));
   }
+
+  // ---------------------------------------------------------------- 流程圖（Mermaid）
+  let mermaidPromise = null;
+  function loadMermaid() {
+    if (!mermaidPromise) mermaidPromise = import("https://esm.sh/mermaid@11").then((m) => {
+      const mm = m.default;
+      mm.initialize({
+        startOnLoad: false, securityLevel: "strict", theme: "base",
+        fontFamily: '"Noto Sans TC", "PingFang TC", system-ui, sans-serif',
+        themeVariables: {
+          fontSize: "13px", background: "transparent",
+          primaryColor: "#EDE6D8", primaryTextColor: "#1E1A15", primaryBorderColor: "#8A8072",
+          lineColor: "#8A8072", textColor: "#1E1A15", mainBkg: "#EDE6D8", secondaryColor: "#EFDCD5", tertiaryColor: "#F5F0E6",
+          clusterBkg: "rgba(255,255,255,.45)", clusterBorder: "rgba(30,26,21,.18)", edgeLabelBackground: "#F5F0E6",
+        },
+        // useMaxWidth 讓 svg 以自然尺寸為上限、容器變窄時自動縮小；放大檢視再另外調整倍率
+        flowchart: { htmlLabels: false, curve: "basis", nodeSpacing: 26, rankSpacing: 32, padding: 8, useMaxWidth: true },
+      });
+      return mm;
+    }).catch((e) => { mermaidPromise = null; throw e; });
+    return mermaidPromise;
+  }
+  // 節點樣式集中在這裡，技能只要在節點後面加 :::human 或 :::agent 就好
+  const CLASS_DEFS = [
+    "classDef agent fill:#EDE6D8,stroke:#8A8072,stroke-width:1px,color:#1E1A15;",
+    "classDef human fill:#EFDCD5,stroke:#B5533C,stroke-width:1.6px,color:#1E1A15;",
+    "classDef gate fill:#FBF7F0,stroke:#B5533C,stroke-width:1.2px,stroke-dasharray:4 3,color:#1E1A15;",
+  ].join("\n");
+  const withClassDefs = (code) => (/classDef\s+(agent|human)\b/.test(code) ? code : code.trimEnd() + "\n" + CLASS_DEFS);
+
+  async function drawMermaid(code, box, zoom) {
+    box.replaceChildren(h("div", { class: "flow__loading" }, "產生流程圖…"));
+    try {
+      const mm = await loadMermaid();
+      const { svg } = await mm.render("m" + Math.random().toString(36).slice(2), withClassDefs(code));
+      box.innerHTML = svg;  // mermaid 以 securityLevel:"strict" 產生並清理過的 SVG
+      const el = box.querySelector("svg");
+      if (el && zoom) {
+        // mermaid 用 style.maxWidth 鎖住自然寬度，放大檢視時把它乘上倍率，太高就交給捲動
+        const natural = parseFloat(el.style.maxWidth) || el.getBoundingClientRect().width;
+        const factor = Math.max(1.3, Math.min(2.4, (box.clientWidth - 24) / natural));
+        el.style.maxWidth = Math.round(natural * factor) + "px";
+      }
+    } catch (e) {
+      box.replaceChildren(
+        h("div", { class: "flow__err" }, "流程圖無法算出（" + String(e && e.message || e).slice(0, 70) + "），以下是原始碼："),
+        h("pre", { class: "flow__src" }, code));
+    }
+  }
+  function legend(gates, extra) {
+    return h("div", { class: "flow__legend" },
+      h("span", {}, h("i", { class: "swatch swatch--agent" }), "AI agent 執行"),
+      gates.length ? h("span", {}, h("i", { class: "swatch swatch--human" }), "需要人類") : null,
+      extra);
+  }
+  function flowBlock(it) {
+    const wrap = h("div", { class: "flow" });
+    const show = () => {
+      const f = it.flow, gates = (f && f.humanGates) || [];
+      if (!f) {
+        wrap.replaceChildren(h("div", {},
+          h("div", { class: "d-h" }, "流程圖"),
+          h("div", { class: "d-desc" }, it.flowSource === "none"
+            ? "這個技能是參考資料型的，沒有多步驟流程可以畫。"
+            : "尚未產生流程圖。讓 agent 執行 inventory-flow 技能就會補上。"),
+          h("div", { class: "d-summary-actions" }, h("button", { class: "btn btn--small", onclick: edit }, "自己畫流程圖"))));
+        return;
+      }
+      const box = h("div", { class: "flow__box" });
+      // replaceChildren 不會像 h() 那樣略過 null，所以先包成一個容器
+      wrap.replaceChildren(h("div", {},
+        h("div", { class: "d-h" }, "流程圖", gates.length ? `（${gates.length} 個人類介入點）` : "（全程由 agent 執行）"),
+        box,
+        legend(gates, h("span", { style: "margin-left:auto;display:flex;gap:6px" },
+          h("button", { class: "btn btn--small", onclick: () => zoomFlow(it) }, "放大"),
+          h("button", { class: "btn btn--small", onclick: edit }, "改流程圖"))),
+        gates.length ? h("div", {}, h("div", { class: "d-h", style: "border:0;padding-top:0;margin-top:0" }, "人類介入點"),
+          h("ol", { class: "flow__gates" }, gates.map((g) => h("li", {}, g)))) : null,
+        it.flowSource === "user" ? h("div", { class: "d-src", style: "margin:-10px 0 16px 0" }, "這張流程圖是你手改的，agent 不會覆蓋。") : null));
+      drawMermaid(f.mermaid, box);
+    };
+    const edit = () => {
+      const ta = h("textarea", { class: "flow-edit", spellcheck: "false" });
+      ta.value = (it.flow && it.flow.mermaid) || "flowchart TD\n    A[使用者提出需求]:::human --> B[agent 執行]:::agent\n    B --> C[使用者確認結果]:::human";
+      const gatesInput = h("input", { class: "modal__input", placeholder: "人類介入點，用中文頓號或逗號分隔（沒有就留空）" });
+      gatesInput.value = ((it.flow && it.flow.humanGates) || []).join("、");
+      wrap.replaceChildren(h("div", {},
+        h("div", { class: "d-h" }, "流程圖原始碼（Mermaid）"),
+        ta, gatesInput,
+        h("div", { class: "d-summary-actions" },
+          h("button", { class: "btn btn--primary btn--small", onclick: () => saveFlow(it, ta.value, gatesInput.value) }, "儲存流程圖"),
+          it.flowSource === "user" ? h("button", { class: "btn btn--small", onclick: () => saveFlow(it, "", "") }, "交還給 agent") : null,
+          h("button", { class: "btn btn--small", onclick: show }, "取消"))));
+      ta.focus();
+    };
+    show();
+    return wrap;
+  }
+  function saveFlow(it, mermaid, gatesText) {
+    const gates = gatesText.split(/[、,，;；\n]/).map((s) => s.trim()).filter(Boolean);
+    return api("../api/flow", { id: it.id, mermaid, humanGates: gates }).then((res) => {
+      toast(res.ok ? (res.locked ? "流程圖已儲存，agent 不會覆蓋。" : "已交還給 agent，下次 inventory-flow 會重畫。") : "儲存失敗：" + (res.error || ""));
+      return reload().then(() => reopen(it.id));
+    });
+  }
+  function zoomFlow(it) {
+    const gates = (it.flow && it.flow.humanGates) || [];
+    $("#lightboxTitle").textContent = it.name;
+    $("#lightboxLegend").replaceChildren(...[...legend(gates, null).childNodes]);
+    const body = $("#lightboxBody");
+    body.replaceChildren();
+    $("#lightbox").setAttribute("aria-hidden", "false");
+    document.body.style.overflow = "hidden";
+    drawMermaid(it.flow.mermaid, body, true);
+  }
+  function closeLightbox() {
+    $("#lightbox").setAttribute("aria-hidden", "true");
+    document.body.style.overflow = $("#drawer").getAttribute("aria-hidden") === "false" ? "hidden" : "";
+  }
+  $("#lightboxClose").addEventListener("click", closeLightbox);
+  $("#lightboxScrim").addEventListener("click", closeLightbox);
 
   // ---------------------------------------------------------------- 檔案編輯器（CodeMirror 6，離線退回純文字）
   const ed = { open: false, item: null, hash: "", dirty: false, get: null, set: null, view: null };

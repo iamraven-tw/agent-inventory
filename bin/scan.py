@@ -34,8 +34,56 @@ CONFIG_PATH = expand(os.environ.get("AGENT_INVENTORY_CONFIG", "~/.config/agent-i
 DATA_DIR = REPO / "data"
 EXCERPT_CHARS = 2500
 SKILL_EXCERPT_CHARS = 500
+STEPS_EXCERPT_CHARS = 900
 PROJECT_DOC_FILES = ["README.md", "readme.md", "CLAUDE.md", "AGENTS.md", "GEMINI.md", ".cursorrules", "package.json", "pyproject.toml"]
 DEFAULT_EXCLUDE = sorted(SKIP_DIRS | {"Applications", "Movies", "Music", "Pictures", "Downloads"})
+
+
+# ---------------------------------------------------------------- workflow extraction
+
+import re as _re  # noqa: E402
+
+_HEADING_RE = _re.compile(r"^\s{0,3}#{2,4}\s+(.+?)\s*$")
+_STEP_RE = _re.compile(r"^\s{0,6}(?:\d+[.)]|[-*+])\s+(.+?)\s*$")
+_TABLE_RE = _re.compile(r"^\s*\|\s*(?![-: ]+\|)(.+?)\s*\|\s*$")
+# Words that mark a point where a human has to look, decide, confirm or authorise.
+HUMAN_RE = _re.compile(
+    r"確認|同意|授權|核准|批准|審核|審閱|人類|人工|使用者選|由使用者|請使用者|問使用者|詢問|點頭|拍板|定稿|過目|停下來|關卡|把關|不得自行|不可自行"
+    r"|approval|approve|confirm|permission|authoriz|authoris|ask the user|human|manual|gate|sign[- ]off|review by",
+    _re.IGNORECASE)
+
+
+def extract_steps(text: str, limit: int = STEPS_EXCERPT_CHARS) -> str:
+    """A compact skeleton of a document: its headings, numbered steps and any line that mentions a human gate.
+
+    This is what the flow-writing agent reads instead of the whole file — enough to see the shape of the
+    workflow and where it stops for a person, without pulling several thousand characters per skill.
+    """
+    out, seen = [], set()
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if not line.strip() or line.strip().startswith("```"):
+            continue
+        m = _HEADING_RE.match(line)
+        if m:
+            entry = "# " + m.group(1)
+        else:
+            m = _STEP_RE.match(line) or _TABLE_RE.match(line)
+            if m:
+                entry = "- " + m.group(1)
+            elif HUMAN_RE.search(line):
+                entry = "! " + line.strip()
+            else:
+                continue
+        entry = _re.sub(r"\s+", " ", entry)[:180]
+        key = entry.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(entry)
+        if sum(len(x) + 1 for x in out) > limit:
+            break
+    return "\n".join(out)[:limit]
 
 
 # ---------------------------------------------------------------- config
@@ -64,12 +112,28 @@ def load_config(args) -> dict:
 # ---------------------------------------------------------------- items
 
 class Inventory:
-    def __init__(self, cache: dict, user_summaries: dict | None = None):
+    def __init__(self, cache: dict, user_summaries: dict | None = None,
+                 flow_cache: dict | None = None, user_flows: dict | None = None):
         self.items: dict[str, dict] = {}
         self.cache = cache
         self.user_summaries = user_summaries or {}  # id → {summary}, written by the website, never overwritten by agents
+        self.flow_cache = flow_cache or {}          # content hash → {mermaid, humanGates}
+        self.user_flows = user_flows or {}          # id → {mermaid, humanGates}, hand-edited on the website
         self.pending: dict[str, dict] = {}
+        self.pending_flows: dict[str, dict] = {}
         self.projects: dict[str, dict] = {}
+
+    def _flow_for(self, iid: str, h: str) -> tuple[dict | None, str]:
+        """A skill's flowchart: hand-edited wins, then the cached one for this exact file content."""
+        user = self.user_flows.get(iid)
+        if user and user.get("mermaid"):
+            return {"mermaid": user["mermaid"], "humanGates": user.get("humanGates") or []}, "user"
+        cached = self.flow_cache.get(h)
+        if cached is None:
+            return None, "pending"
+        if not cached.get("mermaid"):
+            return None, "none"  # the agent looked and decided this skill has no multi-step workflow
+        return {"mermaid": cached["mermaid"], "humanGates": cached.get("humanGates") or []}, "agent"
 
     def add_project(self, path: Path, name: str) -> str:
         """Register a project once and queue a purpose summary for it (from README / rule files)."""
@@ -174,6 +238,14 @@ class Inventory:
             "summary": summary, "summarySource": ssrc,
             "updatedAt": iso_mtime(real), "size": len(raw), "hash": h,
         }
+        if kind == "skill":
+            flow, fsrc = self._flow_for(iid, h)
+            item["flow"], item["flowSource"] = flow, fsrc
+            if fsrc == "pending" and raw:
+                self.pending_flows[iid] = {
+                    "id": iid, "name": display, "path": item["path"], "hash": h,
+                    "description": desc[:300], "steps": extract_steps(body.strip() or text),
+                }
         if ssrc == "pending" and raw:
             excerpt = body.strip() if body.strip() else text
             if import_text:
@@ -375,7 +447,11 @@ def run(cfg: dict, usage: dict | None = None) -> dict:
     cache = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.is_file() else {}
     us_path = DATA_DIR / "user-summaries.json"
     user_summaries = json.loads(us_path.read_text(encoding="utf-8")) if us_path.is_file() else {}
-    inv = Inventory(cache, user_summaries)
+    fc_path = DATA_DIR / "flow-cache.json"
+    flow_cache = json.loads(fc_path.read_text(encoding="utf-8")) if fc_path.is_file() else {}
+    uf_path = DATA_DIR / "user-flows.json"
+    user_flows = json.loads(uf_path.read_text(encoding="utf-8")) if uf_path.is_file() else {}
+    inv = Inventory(cache, user_summaries, flow_cache, user_flows)
     specs = adapters.get(cfg["tools"])
     exclude = set(cfg["exclude"])
 
@@ -427,6 +503,8 @@ def run(cfg: dict, usage: dict | None = None) -> dict:
         "projects": len(inv.projects),
         "shared": sum(1 for i in inv.items.values() if len(i["tools"]) > 1),
         "pending": len(inv.pending),
+        "pendingFlows": len(inv.pending_flows),
+        "withFlow": sum(1 for i in inv.items.values() if i.get("flow")),
         "installedTools": sum(1 for t in tools_out if t["installed"]),
     }
     return {
@@ -442,6 +520,7 @@ def run(cfg: dict, usage: dict | None = None) -> dict:
         "projects": inv.projects,
         "items": inv.items,
         "_pending": list(inv.pending.values()),
+        "_pendingFlows": list(inv.pending_flows.values()),
     }
 
 
@@ -461,12 +540,15 @@ def main():
         usage = usage_mod.collect(cfg["tools"])
     result = run(cfg, usage)
     pending = result.pop("_pending")
+    pending_flows = result.pop("_pendingFlows")
     (DATA_DIR / "inventory.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
     (DATA_DIR / "pending-summaries.json").write_text(json.dumps(pending, ensure_ascii=False, indent=1), encoding="utf-8")
+    (DATA_DIR / "pending-flows.json").write_text(json.dumps(pending_flows, ensure_ascii=False, indent=1), encoding="utf-8")
     if not args.quiet:
         s = result["stats"]
         print(f"掃描完成 → {display_path(DATA_DIR / 'inventory.json')}")
-        print(f"  規則 {s['rules']}｜技能 {s['skills']}｜專案 {s['projects']}｜跨工具共用 {s['shared']}｜待補摘要 {s['pending']}｜{USAGE_WINDOW_DAYS} 天未用技能 {s['unused90']}")
+        print(f"  規則 {s['rules']}｜技能 {s['skills']}｜專案 {s['projects']}｜跨工具共用 {s['shared']}｜待補摘要 {s['pending']}｜"
+              f"待補流程圖 {s['pendingFlows']}｜{USAGE_WINDOW_DAYS} 天未用技能 {s['unused90']}")
         for t in result["tools"]:
             flag = "✓" if t["installed"] else "✗ 未偵測到"
             print(f"  {t['name']:<22} {flag:<8} 全域規則 {len(t['global']['rules']):>3}  全域技能 {len(t['global']['skills']):>3}  "

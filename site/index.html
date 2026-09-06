@@ -68,6 +68,18 @@
   </div>
 </aside>
 
+<div class="lightbox" id="lightbox" aria-hidden="true">
+  <div class="lightbox__scrim" id="lightboxScrim"></div>
+  <div class="lightbox__panel" role="dialog" aria-modal="true" aria-labelledby="lightboxTitle">
+    <div class="lightbox__bar">
+      <strong class="lightbox__title" id="lightboxTitle"></strong>
+      <div class="flow__legend" id="lightboxLegend"></div>
+      <button class="btn" id="lightboxClose">關閉</button>
+    </div>
+    <div class="lightbox__body" id="lightboxBody"></div>
+  </div>
+</div>
+
 <div class="editor" id="editor" aria-hidden="true">
   <div class="editor__bar">
     <div class="editor__meta">

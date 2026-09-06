@@ -149,8 +149,10 @@ def rescan():
     usage = json.loads(usage_path.read_text(encoding="utf-8")) if usage_path.is_file() else {}
     result = scan.run(cfg, usage)
     pending = result.pop("_pending")
+    pending_flows = result.pop("_pendingFlows")
     (DATA / "inventory.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
     (DATA / "pending-summaries.json").write_text(json.dumps(pending, ensure_ascii=False, indent=1), encoding="utf-8")
+    (DATA / "pending-flows.json").write_text(json.dumps(pending_flows, ensure_ascii=False, indent=1), encoding="utf-8")
     return result["stats"]
 
 
@@ -213,7 +215,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         u = urlparse(self.path)
-        if u.path not in ("/api/delete", "/api/save", "/api/summary"):
+        if u.path not in ("/api/delete", "/api/save", "/api/summary", "/api/flow"):
             return self._json(404, {"ok": False, "error": "not found"})
         if self.headers.get("X-Requested-With") != "agent-inventory" or "application/json" not in (self.headers.get("Content-Type") or ""):
             return self._json(400, {"ok": False, "error": "缺少必要標頭"})
@@ -226,6 +228,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self._save(inv, body)
         if u.path == "/api/summary":
             return self._summary(inv, body)
+        if u.path == "/api/flow":
+            return self._flow(inv, body)
         item_id = str(body.get("id", ""))
         rec = inv.get("items", {}).get(item_id)
         kind = "item"
@@ -291,6 +295,32 @@ class Handler(SimpleHTTPRequestHandler):
         except Exception as e:
             stats = {"error": str(e)}
         return self._json(200, {"ok": True, "locked": bool(text), "stats": stats})
+
+    def _flow(self, inv: dict, body: dict):
+        item_id = str(body.get("id", ""))
+        rec = inv.get("items", {}).get(item_id)
+        if not rec or rec.get("kind") != "skill":
+            return self._json(404, {"ok": False, "error": "找不到這個技能"})
+        code = str(body.get("mermaid", "")).strip()
+        if code and not any(code.startswith(k) for k in ("flowchart", "graph ", "sequenceDiagram", "stateDiagram")):
+            return self._json(400, {"ok": False, "error": "Mermaid 必須以 flowchart 或 graph 開頭"})
+        path = DATA / "user-flows.json"
+        try:
+            uf = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+        except json.JSONDecodeError:
+            uf = {}
+        if code:
+            uf[item_id] = {"mermaid": code, "humanGates": [str(g).strip() for g in (body.get("humanGates") or []) if str(g).strip()],
+                           "at": datetime.now().astimezone().isoformat(timespec="seconds"), "name": rec.get("name")}
+        else:
+            uf.pop(item_id, None)  # empty = hand it back to the agent
+        DATA.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(uf, ensure_ascii=False, indent=1), encoding="utf-8")
+        try:
+            stats = rescan()
+        except Exception as e:
+            stats = {"error": str(e)}
+        return self._json(200, {"ok": True, "locked": bool(code), "stats": stats})
 
     def do_GET(self):
         u = urlparse(self.path)

@@ -34,10 +34,11 @@ python3 bin/scan.py --roots "~/Developer,~/Projects" --tools claude-code,codex -
 
 - `data/inventory.json`：網站的唯一資料來源。
 - `data/usage.json`：使用紀錄的原始統計（技能名稱、工作目錄）。
+- `data/pending-flows.json`：還沒有流程圖的技能，每筆附掃描器抽出的步驟骨架，給 `inventory-flow` 用。
 - `data/pending-summaries.json`：待補摘要清單，每筆含 `id`、`name`、`path`、`excerpt`（最多 2500 字的內文節錄）。
 
 ## 回報格式
 
 把腳本印出的表格轉述給使用者：每個工具的全域規則、全域技能、專案數、專案規則、專案技能數量，以及「跨工具共用」與「待補摘要」兩個總數。若某工具顯示「未偵測到」，說明那一列是它「如果安裝了會讀到」的共用目錄內容。
 
-待補摘要大於 0 時，接著執行 `inventory-summarize`；等於 0 就直接執行 `inventory-serve`。
+待補摘要大於 0 時接著執行 `inventory-summarize`；待補流程圖大於 0 時接著執行 `inventory-flow`；都補完就執行 `inventory-serve`。
