@@ -1,0 +1,9 @@
+# 掃描產物（含個人路徑），不進版控
+data/
+__pycache__/
+*.pyc
+.DS_Store
+.claude/launch.json
+
+# 本機規劃書，不公開
+PLAN.md

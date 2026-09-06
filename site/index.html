@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Inventory · 本機 AI Agent 規則與技能盤點</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=Noto+Sans+TC:wght@300;400;500;700&family=Noto+Serif+TC:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23F5F0E6'/%3E%3Ccircle cx='11' cy='16' r='5' fill='%23B5533C'/%3E%3Ccircle cx='21' cy='16' r='5' fill='%231E1A15' fill-opacity='.85'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="grain" aria-hidden="true"></div>
+
+<header class="masthead">
+  <div class="masthead__meta">
+    <span class="kicker">Agent Inventory</span>
+    <span class="masthead__time" id="generatedAt">—</span>
+  </div>
+  <h1 class="masthead__title">本機 <em>AI Agent</em><br>規則與技能盤點</h1>
+  <p class="masthead__lede" id="lede">正在讀取 <code>data/inventory.json</code>…</p>
+</header>
+
+<main id="app" class="app" hidden>
+
+  <section class="overview" aria-label="總覽">
+    <div class="stats" id="stats"></div>
+    <div class="matrix-wrap">
+      <table class="matrix" id="matrix" aria-label="各工具四分類數量"></table>
+    </div>
+  </section>
+
+  <nav class="toolnav" id="toolnav" aria-label="工具"></nav>
+
+  <section class="toolbar">
+    <label class="search">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="search" type="search" placeholder="搜尋名稱、摘要、路徑…" autocomplete="off">
+    </label>
+    <div class="filters" id="filters">
+      <button class="chip is-on" data-filter="all">全部</button>
+      <button class="chip" data-filter="rule">規則</button>
+      <button class="chip" data-filter="skill">技能</button>
+      <button class="chip" data-filter="shared">跨工具共用</button>
+      <button class="chip" data-filter="user">自建</button>
+      <button class="chip" data-filter="plugin">外掛 / 內建</button>
+    </div>
+  </section>
+
+  <section class="tool" id="tool"></section>
+</main>
+
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <div class="drawer__scrim" id="drawerScrim"></div>
+  <div class="drawer__panel" role="dialog" aria-modal="true" aria-labelledby="drawerTitle">
+    <button class="drawer__close" id="drawerClose" aria-label="關閉">×</button>
+    <div class="drawer__body" id="drawerBody"></div>
+  </div>
+</aside>
+
+<footer class="colophon">
+  <span>agent-inventory · 資料只在本機，沒有任何內容離開這台電腦。</span>
+  <span id="configLine"></span>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,253 @@
+/* Agent Inventory — 前端（原生 JS，無打包） */
+(() => {
+  const $ = (sel, el = document) => el.querySelector(sel);
+  const h = (tag, attrs = {}, ...kids) => {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v == null || v === false) continue;
+      if (k === "class") el.className = v;
+      else if (k === "style") el.setAttribute("style", v);
+      else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+      else if (k === "html") el.innerHTML = v;
+      else el.setAttribute(k, v === true ? "" : v);
+    }
+    for (const kid of kids.flat(Infinity)) {
+      if (kid == null || kid === false || kid === true) continue;
+      el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+    }
+    return el;
+  };
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  const state = { data: null, tool: null, filter: "all", q: "" };
+  const KIND = { rule: "規則", skill: "技能", note: "說明" };
+  const SOURCE = { user: "自建", plugin: "外掛", builtin: "內建", bundled: "內附", compat: "相容讀取" };
+  const SUMSRC = { frontmatter: "摘要來源：技能 frontmatter 的 description", agent: "摘要來源：AI agent 讀檔撰寫", import: "摘要來源：自動判定為引用檔", note: "", pending: "尚未撰寫摘要，請執行 inventory-summarize 技能" };
+
+  // ---------------------------------------------------------------- 載入
+  fetch("../data/inventory.json", { cache: "no-store" })
+    .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+    .then(init)
+    .catch((err) => {
+      $("#lede").innerHTML = `讀不到 <code>data/inventory.json</code>。請先在專案目錄執行 <code>python3 bin/scan.py</code>，再用 <code>python3 bin/serve.py</code> 開啟本頁。<br><small class="mono">${esc(err.message)}</small>`;
+    });
+
+  function init(data) {
+    state.data = data;
+    const first = data.tools.find((t) => t.installed) || data.tools[0];
+    state.tool = first?.id;
+    $("#generatedAt").textContent = "掃描時間 " + fmtTime(data.generatedAt);
+    const s = data.stats;
+    $("#lede").textContent = `這台電腦上有 ${s.installedTools} 個 AI agent 工具，共載入 ${s.rules} 條規則與 ${s.skills} 個技能；其中 ${s.shared} 個項目透過 symlink 或共用目錄同時餵給多個工具。點任何卡片可看完整摘要與路徑。`;
+    $("#configLine").textContent = `掃描根目錄 ${data.config.projectRoots.join("、")} · 深度 ${data.config.scanDepth}`;
+    renderStats(); renderMatrix(); renderNav(); bindToolbar(); renderTool();
+    $("#app").hidden = false;
+  }
+
+  // ---------------------------------------------------------------- 總覽
+  function renderStats() {
+    const s = state.data.stats;
+    const cells = [
+      [s.rules, "條規則", "rules"], [s.skills, "個技能", "skills"], [s.projects, "個專案", "projects"],
+      [s.shared, "個跨工具共用", "shared"], [s.installedTools, `/ ${state.data.tools.length} 個工具`, "tools"], [s.pending, "筆待補摘要", "pending"],
+    ];
+    $("#stats").replaceChildren(...cells.map(([n, l]) => h("div", { class: "stat" }, h("div", { class: "stat__n" }, n), h("div", { class: "stat__l" }, l))));
+  }
+
+  function counts(tool) {
+    const pr = tool.projects.reduce((a, p) => a + p.rules.length, 0);
+    const ps = tool.projects.reduce((a, p) => a + p.skills.length, 0);
+    return { gr: tool.global.rules.filter((id) => state.data.items[id]?.kind !== "note").length, gs: tool.global.skills.length, pr, ps, p: tool.projects.length };
+  }
+
+  function renderMatrix() {
+    const head = h("tr", {}, h("th", {}, "工具"), h("th", {}, "全域規則"), h("th", {}, "全域技能"), h("th", {}, "專案"), h("th", {}, "專案規則"), h("th", {}, "專案技能"));
+    const rows = state.data.tools.map((t) => {
+      const c = counts(t);
+      const num = (n) => h("td", {}, h("span", { class: n ? "" : "n0" }, n));
+      return h("tr", { class: t.installed ? "" : "is-off", onclick: () => selectTool(t.id), style: "cursor:pointer" },
+        h("td", {}, h("span", { class: "dot", style: `--c:${t.color}` }), t.name, t.installed ? "" : h("span", { class: "mono", style: "margin-left:8px;font-size:10px;color:var(--ink-3)" }, "未偵測到")),
+        num(c.gr), num(c.gs), num(c.p), num(c.pr), num(c.ps));
+    });
+    $("#matrix").replaceChildren(h("thead", {}, head), h("tbody", {}, rows));
+  }
+
+  // ---------------------------------------------------------------- 工具分頁
+  function renderNav() {
+    const nav = $("#toolnav");
+    nav.replaceChildren(...state.data.tools.map((t) => {
+      const c = counts(t);
+      return h("button", { class: `tab ${t.id === state.tool ? "is-on" : ""} ${t.installed ? "" : "is-off"}`, "data-id": t.id, onclick: () => selectTool(t.id) },
+        h("span", { class: "dot", style: `--c:${t.color}` }), t.name,
+        t.installed ? h("span", { class: "count" }, c.gr + c.gs + c.pr + c.ps) : h("span", { class: "off" }, "未偵測到"));
+    }));
+  }
+  function selectTool(id) {
+    state.tool = id;
+    for (const b of document.querySelectorAll(".tab")) b.classList.toggle("is-on", b.dataset.id === id);
+    renderTool();
+    $("#tool").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function bindToolbar() {
+    $("#search").addEventListener("input", (e) => { state.q = e.target.value.trim().toLowerCase(); renderTool(); });
+    $("#filters").addEventListener("click", (e) => {
+      const b = e.target.closest(".chip"); if (!b) return;
+      state.filter = b.dataset.filter;
+      for (const c of document.querySelectorAll(".chip")) c.classList.toggle("is-on", c === b);
+      renderTool();
+    });
+    $("#drawerClose").addEventListener("click", closeDrawer);
+    $("#drawerScrim").addEventListener("click", closeDrawer);
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
+  }
+
+  // ---------------------------------------------------------------- 篩選
+  function visible(item) {
+    if (!item) return false;
+    const f = state.filter;
+    if (f === "rule" && item.kind !== "rule") return false;
+    if (f === "skill" && item.kind !== "skill") return false;
+    if (f === "shared" && item.tools.length < 2) return false;
+    if (f === "user" && item.source !== "user") return false;
+    if (f === "plugin" && !["plugin", "builtin", "bundled"].includes(item.source)) return false;
+    if (state.q) {
+      const hay = `${item.name} ${item.summary} ${item.description} ${item.path} ${item.tag || ""} ${item.project || ""}`.toLowerCase();
+      if (!hay.includes(state.q)) return false;
+    }
+    return true;
+  }
+
+  // ---------------------------------------------------------------- 工具內容
+  function renderTool() {
+    const t = state.data.tools.find((x) => x.id === state.tool);
+    const root = $("#tool");
+    root.style.setProperty("--tool", t.color);
+    document.documentElement.style.setProperty("--tool", t.color);
+    const items = state.data.items;
+    const pick = (ids) => ids.map((id) => items[id]).filter(visible);
+
+    const head = h("div", { class: "tool__head" },
+      h("h2", { class: "tool__name" }, h("span", { class: "dot", style: `--c:${t.color}` }), t.name),
+      t.docs && h("a", { class: "tool__docs", href: t.docs, target: "_blank", rel: "noopener" }, "官方文件 ↗"));
+    const notes = [];
+    if (!t.installed) notes.push(h("div", { class: "note note--off" }, "這台電腦沒有偵測到這個工具的設定目錄。下面列出的是它「如果安裝了」會讀到的共用目錄內容。"));
+    for (const n of t.notes || []) notes.push(h("div", { class: "note" }, n));
+
+    const gRules = pick(t.global.rules), gSkills = pick(t.global.skills);
+    const projR = t.projects.map((p) => ({ ...p, list: pick(p.rules) })).filter((p) => p.list.length);
+    const projS = t.projects.map((p) => ({ ...p, list: pick(p.skills) })).filter((p) => p.list.length);
+
+    root.replaceChildren(head, ...notes,
+      section("01", "全域規則", gRules.length, grid(gRules), "沒有找到全域規則檔。"),
+      section("02", "全域技能", gSkills.length, grid(gSkills), "沒有找到全域技能。"),
+      section("03", "專案規則", projR.reduce((a, p) => a + p.list.length, 0), projects(projR), "掃描的專案裡沒有這個工具會讀的規則檔。"),
+      section("04", "專案技能", projS.reduce((a, p) => a + p.list.length, 0), projects(projS), "掃描的專案裡沒有這個工具會讀的技能。"));
+  }
+
+  function section(num, title, count, body, empty) {
+    return h("section", { class: "section" },
+      h("div", { class: "section__head" }, h("span", { class: "section__num" }, num), h("h3", { class: "section__title" }, title), h("span", { class: "section__count" }, count)),
+      count ? body : h("p", { class: "section__empty" }, state.q || state.filter !== "all" ? "沒有符合目前搜尋或篩選的項目。" : empty));
+  }
+  function grid(list) { return h("div", { class: "grid" }, list.map((it, i) => card(it, i))); }
+  function projects(list) {
+    return h("div", {}, list.map((p) => {
+      const meta = state.data.projects?.[p.id];
+      return h("div", { class: "project" },
+        h("div", { class: "project__head" },
+          h("button", { class: "project__name", onclick: () => meta && openProject(meta) }, p.name),
+          h("span", { class: "project__path" }, p.path)),
+        h("p", { class: `project__sum ${meta?.summary ? "" : "is-pending"}` }, meta?.summary || "尚未撰寫這個專案的目的摘要"),
+        grid(p.list));
+    }));
+  }
+  function openProject(meta) {
+    const tools = state.data.tools.filter((t) => meta.tools.includes(t.id));
+    $("#drawerBody").replaceChildren(h("div", {},
+      h("div", { class: "d-kicker" }, "專案", h("span", { class: "mono" }, meta.path)),
+      h("h2", { class: "d-title" }, meta.name),
+      h("p", { class: `d-summary ${meta.summary ? "" : "is-pending"}` }, meta.summary || "尚未撰寫這個專案的目的摘要"),
+      h("div", { class: "d-h" }, "在這個專案裡讀規則或技能的工具"),
+      h("ul", { class: "d-paths" }, tools.map((t) => h("li", {}, h("span", { class: "who" }, h("span", { class: "dot", style: `--c:${t.color}` }), t.name), h("span", {}, "")))),
+      h("div", { class: "d-h" }, "數量"),
+      h("div", { class: "d-meta" }, h("div", {}, h("b", {}, "規則"), meta.rules), h("div", {}, h("b", {}, "技能"), meta.skills)),
+      h("div", { class: "d-actions" },
+        h("button", { class: "btn btn--primary", onclick: (e) => openWith(meta.id, "reveal", e.target) }, isMac() ? "在 Finder 顯示" : "在檔案總管顯示"),
+        h("button", { class: "btn", onclick: (e) => openWith(meta.id, "vscode", e.target) }, "VS Code"),
+        h("button", { class: "btn", onclick: (e) => openWith(meta.id, "cursor", e.target) }, "Cursor"),
+        h("button", { class: "btn", onclick: (e) => copy(meta.realPath || meta.path, e.target) }, "複製路徑"))));
+    $("#drawer").setAttribute("aria-hidden", "false");
+    document.body.style.overflow = "hidden";
+  }
+
+  function card(it, i) {
+    const shared = it.tools.length > 1;
+    return h("button", { class: `card card--${it.kind}`, style: `--i:${Math.min(i, 24)}`, onclick: () => openDrawer(it) },
+      h("div", { class: "card__top" }, h("div", { class: "card__name" }, it.name), h("span", { class: "card__kind" }, it.tag ? it.tag.replace(/^plugin:/, "") : KIND[it.kind])),
+      h("div", { class: `card__sum ${it.summarySource === "pending" ? "is-pending" : ""}` }, it.summary || "尚未撰寫摘要"),
+      h("div", { class: "card__foot" },
+        h("div", { class: "tags" }, it.source !== "user" && h("span", { class: `tag tag--${it.source}` }, SOURCE[it.source] || it.source), it.isSymlink && h("span", { class: "tag" }, "symlink")),
+        shared && sharedDots(it)));
+  }
+  function sharedDots(it) {
+    const tools = state.data.tools.filter((t) => it.tools.includes(t.id));
+    return h("span", { class: "shared", title: "共用於：" + tools.map((t) => t.name).join("、") },
+      tools.map((t) => h("span", { class: "dot", style: `--c:${t.color}` })), h("span", { class: "shared__n" }, `×${tools.length}`));
+  }
+
+  // ---------------------------------------------------------------- 抽屜
+  function openDrawer(it) {
+    const tools = state.data.tools.filter((t) => it.tools.includes(t.id));
+    const body = $("#drawerBody");
+    const abs = it.realPath || it.path;
+    // 用 h() 包一層，讓條件式產生的 false / 0 / null 被自動略過，不會變成文字
+    body.replaceChildren(h("div", {},
+      h("div", { class: "d-kicker" }, KIND[it.kind], it.tag && h("span", {}, "· " + it.tag), it.source !== "user" && h("span", {}, "· " + (SOURCE[it.source] || it.source)), h("span", {}, "· " + (it.scope === "global" ? "全域" : "專案")), it.project && h("span", { class: "mono" }, it.project)),
+      h("h2", { class: `d-title ${it.kind === "rule" ? "mono" : ""}` }, it.name),
+      h("p", { class: `d-summary ${it.summarySource === "pending" ? "is-pending" : ""}` }, it.summary || "尚未撰寫摘要"),
+      SUMSRC[it.summarySource] && h("div", { class: "d-src" }, SUMSRC[it.summarySource]),
+      it.description && it.summarySource !== "frontmatter" && it.kind !== "note" && [h("div", { class: "d-h" }, "frontmatter description"), h("div", { class: "d-desc" }, it.description)],
+      it.trigger && [h("div", { class: "d-h" }, "觸發 / 套用條件"), h("div", { class: "d-desc mono" }, it.trigger)],
+      it.imports?.length ? [h("div", { class: "d-h" }, "引用"), h("div", { class: "d-desc mono" }, it.imports.join("、"))] : null,
+      it.kind !== "note" && [h("div", { class: "d-h" }, `讀取這個檔案的工具（${tools.length}）`),
+        h("ul", { class: "d-paths" }, tools.map((t) => h("li", {}, h("span", { class: "who" }, h("span", { class: "dot", style: `--c:${t.color}` }), t.name), h("code", {}, it.paths?.[t.id] || it.path))))],
+      it.kind !== "note" && [h("div", { class: "d-h" }, "檔案"),
+        h("div", { class: "d-meta" },
+          h("div", {}, h("b", {}, "實體路徑"), h("code", {}, it.realPath)),
+          h("div", {}, h("b", {}, "最後修改"), fmtTime(it.updatedAt)),
+          h("div", {}, h("b", {}, "大小"), fmtSize(it.size)),
+          h("div", {}, h("b", {}, "內容 hash"), h("code", {}, it.hash)))],
+      it.kind !== "note" && h("div", { class: "d-actions" },
+        h("button", { class: "btn btn--primary", onclick: (e) => openWith(it.id, "editor", e.target) }, isMac() ? "用文字編輯開啟" : "用記事本開啟"),
+        h("button", { class: "btn", onclick: (e) => openWith(it.id, "reveal", e.target) }, isMac() ? "在 Finder 顯示" : "在檔案總管顯示"),
+        h("button", { class: "btn", onclick: (e) => openWith(it.id, "vscode", e.target) }, "VS Code"),
+        h("button", { class: "btn", onclick: (e) => openWith(it.id, "cursor", e.target) }, "Cursor"),
+        h("button", { class: "btn", onclick: (e) => copy(abs, e.target) }, "複製路徑"))));
+    $("#drawer").setAttribute("aria-hidden", "false");
+    document.body.style.overflow = "hidden";
+  }
+  function closeDrawer() { $("#drawer").setAttribute("aria-hidden", "true"); document.body.style.overflow = ""; }
+  function copy(text, btn) {
+    navigator.clipboard?.writeText(expandHome(text)).then(() => { const o = btn.textContent; btn.textContent = "已複製"; setTimeout(() => (btn.textContent = o), 1200); });
+  }
+  function expandHome(p) { return p.startsWith("~") ? (state.data.home || "") + p.slice(1) : p; }
+  function isMac() { return /Mac/i.test(navigator.platform || navigator.userAgent); }
+  // 透過本機 serve.py 的 /api/open 呼叫作業系統開檔（瀏覽器本身無法啟動記事本／文字編輯）
+  function openWith(id, how, btn) {
+    const o = btn.textContent; btn.textContent = "開啟中…";
+    fetch(`../api/open?id=${encodeURIComponent(id)}&with=${how}`).then((r) => r.json()).then((j) => {
+      btn.textContent = j.ok ? "已送出" : "失敗";
+      if (!j.ok) alert(`無法開啟：${j.error || j.message || "未知錯誤"}\n這個功能需要用 bin/serve.py 啟動網站。`);
+    }).catch(() => { btn.textContent = "失敗"; alert("連不到 serve.py。請用 python3 bin/serve.py 啟動網站，直接開 index.html 無法呼叫本機程式。"); })
+      .finally(() => setTimeout(() => (btn.textContent = o), 1400));
+  }
+
+  // ---------------------------------------------------------------- 工具函式
+  function fmtTime(iso) {
+    if (!iso) return "—";
+    const d = new Date(iso); if (isNaN(d)) return iso;
+    return d.toLocaleString("zh-TW", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+  }
+  function fmtSize(n) { if (!n) return "—"; return n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`; }
+})();
