@@ -68,6 +68,23 @@
   </div>
 </aside>
 
+<div class="editor" id="editor" aria-hidden="true">
+  <div class="editor__bar">
+    <div class="editor__meta">
+      <span class="kicker">編輯</span>
+      <strong class="editor__name" id="editorName"></strong>
+      <code class="editor__path" id="editorPath"></code>
+      <span class="editor__shared" id="editorShared"></span>
+    </div>
+    <div class="editor__actions">
+      <span class="editor__status" id="editorStatus"></span>
+      <button class="btn" id="editorCancel">關閉</button>
+      <button class="btn btn--primary" id="editorSave" disabled>儲存 ⌘S</button>
+    </div>
+  </div>
+  <div class="editor__body" id="editorBody"></div>
+</div>
+
 <div class="modal" id="modal" aria-hidden="true">
   <div class="modal__scrim" id="modalScrim"></div>
   <div class="modal__box" role="alertdialog" aria-modal="true" aria-labelledby="modalTitle">

@@ -272,6 +272,33 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(20px); z-index: 90; padding: 12px 18px; background: var(--ink); color: var(--paper); border-radius: 8px; font-size: 13.5px; opacity: 0; transition: all .3s var(--ease); pointer-events: none; max-width: min(640px, calc(100% - 32px)); }
 .toast.is-on { opacity: 1; transform: translateX(-50%); }
 
+/* ---------------------------------------------------------------- 編輯器 */
+.editor { position: fixed; inset: 0; z-index: 70; background: var(--paper); display: flex; flex-direction: column; visibility: hidden; opacity: 0; transform: translateY(8px); transition: all .25s var(--ease); }
+.editor[aria-hidden="false"] { visibility: visible; opacity: 1; transform: none; }
+.editor__bar { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 12px var(--pad); border-bottom: 1px solid var(--rule-strong); background: var(--paper); flex-wrap: wrap; }
+.editor__meta { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; min-width: 0; }
+.editor__name { font-family: var(--serif); font-size: 20px; font-weight: 500; }
+.editor__path { font-size: 11px; color: var(--ink-3); word-break: break-all; }
+.editor__shared { font-family: var(--mono); font-size: 10.5px; color: var(--accent); }
+.editor__actions { display: flex; align-items: center; gap: 8px; }
+.editor__status { font-family: var(--mono); font-size: 11px; color: var(--ink-3); margin-right: 6px; }
+.editor__status.is-dirty { color: var(--accent); }
+.editor__body { flex: 1; min-height: 0; display: flex; }
+.editor__body .cm-editor { flex: 1; height: 100%; font-size: 13.5px; background: rgba(255,255,255,.35); }
+.editor__body .cm-scroller { font-family: var(--mono); line-height: 1.65; }
+.editor__body .cm-gutters { background: var(--paper-2); border-right: 1px solid var(--rule); color: var(--ink-3); }
+.editor__body .cm-activeLine { background: rgba(181,83,60,.06); }
+.editor__body .cm-activeLineGutter { background: rgba(181,83,60,.10); }
+.editor__body .cm-focused { outline: none; }
+.editor__plain { flex: 1; display: grid; grid-template-columns: 52px 1fr; font-family: var(--mono); font-size: 13.5px; line-height: 1.65; }
+.editor__gutter { padding: 14px 8px 14px 0; text-align: right; color: var(--ink-3); background: var(--paper-2); border-right: 1px solid var(--rule); white-space: pre; overflow: hidden; user-select: none; }
+.editor__ta { border: 0; outline: 0; resize: none; padding: 14px 18px; font: inherit; line-height: inherit; color: var(--ink); background: rgba(255,255,255,.35); white-space: pre; overflow: auto; tab-size: 2; }
+.editor__fallback { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+.d-summary-edit { width: 100%; box-sizing: border-box; font: inherit; font-size: 14.5px; line-height: 1.7; padding: 12px 14px; border: 1px solid var(--rule-strong); border-radius: 6px; background: rgba(255,255,255,.5); min-height: 120px; resize: vertical; }
+.d-summary-actions { display: flex; gap: 8px; margin: 8px 0 18px; }
+.btn--small { padding: 5px 10px; font-size: 12px; }
+.tag--user { background: rgba(78,125,91,.14); }
+
 /* ---------------------------------------------------------------- 頁尾 */
 .colophon {
   position: relative; z-index: 1; max-width: var(--maxw); margin: 0 auto; padding: 22px var(--pad) 48px;

@@ -24,7 +24,7 @@
   const staleMs = () => (state.data?.usageWindowDays || 90) * DAY;
   const KIND = { rule: "規則", skill: "技能", note: "說明" };
   const SOURCE = { user: "自建", plugin: "外掛", builtin: "內建", bundled: "內附", compat: "相容讀取" };
-  const SUMSRC = { frontmatter: "摘要來源：技能 frontmatter 的 description", agent: "摘要來源：AI agent 讀檔撰寫", import: "摘要來源：自動判定為引用檔", note: "", pending: "尚未撰寫摘要，請執行 inventory-summarize 技能" };
+  const SUMSRC = { frontmatter: "摘要來源：技能 frontmatter 的 description", agent: "摘要來源：AI agent 讀檔撰寫", user: "摘要來源：你在網頁上手改，agent 不會覆蓋", import: "摘要來源：自動判定為引用檔", note: "", pending: "尚未撰寫摘要，請執行 inventory-summarize 技能" };
 
   // ---------------------------------------------------------------- 載入
   fetch("../data/inventory.json", { cache: "no-store" })
@@ -121,7 +121,7 @@
     });
     $("#drawerClose").addEventListener("click", closeDrawer);
     $("#drawerScrim").addEventListener("click", closeDrawer);
-    document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") { if (ed.open) closeEditor(false); else if ($("#modal").getAttribute("aria-hidden") === "false") closeModal(); else closeDrawer(); } });
   }
 
   // ---------------------------------------------------------------- 篩選
@@ -209,7 +209,7 @@
     $("#drawerBody").replaceChildren(h("div", {},
       h("div", { class: "d-kicker" }, "專案", h("span", { class: "mono" }, meta.path)),
       h("h2", { class: "d-title" }, meta.name),
-      h("p", { class: `d-summary ${meta.summary ? "" : "is-pending"}` }, meta.summary || "尚未撰寫這個專案的目的摘要"),
+      summaryEditable(meta),
       h("div", { class: "d-h" }, "在這個專案裡讀規則或技能的工具"),
       h("ul", { class: "d-paths" }, tools.map((t) => h("li", {}, h("span", { class: "who" }, h("span", { class: "dot", style: `--c:${t.color}` }), t.name), h("span", {}, "")))),
       h("div", { class: "d-h" }, "數量"),
@@ -250,8 +250,7 @@
     body.replaceChildren(h("div", {},
       h("div", { class: "d-kicker" }, KIND[it.kind], it.tag && h("span", {}, "· " + it.tag), it.source !== "user" && h("span", {}, "· " + (SOURCE[it.source] || it.source)), h("span", {}, "· " + (it.scope === "global" ? "全域" : "專案")), it.project && h("span", { class: "mono" }, it.project)),
       h("h2", { class: `d-title ${it.kind === "rule" ? "mono" : ""}` }, it.name),
-      h("p", { class: `d-summary ${it.summarySource === "pending" ? "is-pending" : ""}` }, it.summary || "尚未撰寫摘要"),
-      SUMSRC[it.summarySource] && h("div", { class: "d-src" }, SUMSRC[it.summarySource]),
+      summaryEditable(it),
       it.description && it.summarySource !== "frontmatter" && it.kind !== "note" && [h("div", { class: "d-h" }, "frontmatter description"), h("div", { class: "d-desc" }, it.description)],
       it.trigger && [h("div", { class: "d-h" }, "觸發 / 套用條件"), h("div", { class: "d-desc mono" }, it.trigger)],
       it.imports?.length ? [h("div", { class: "d-h" }, "引用"), h("div", { class: "d-desc mono" }, it.imports.join("、"))] : null,
@@ -265,7 +264,8 @@
           h("div", {}, h("b", {}, "大小"), fmtSize(it.size)),
           h("div", {}, h("b", {}, "內容 hash"), h("code", {}, it.hash)))],
       it.kind !== "note" && h("div", { class: "d-actions" },
-        h("button", { class: "btn btn--primary", onclick: (e) => openWith(it.id, "editor", e.target) }, isMac() ? "用文字編輯開啟" : "用記事本開啟"),
+        h("button", { class: "btn btn--primary", onclick: () => openEditor(it) }, "在網頁上編輯"),
+        h("button", { class: "btn", onclick: (e) => openWith(it.id, "editor", e.target) }, isMac() ? "用文字編輯開啟" : "用記事本開啟"),
         h("button", { class: "btn", onclick: (e) => openWith(it.id, "reveal", e.target) }, isMac() ? "在 Finder 顯示" : "在檔案總管顯示"),
         h("button", { class: "btn", onclick: (e) => openWith(it.id, "vscode", e.target) }, "VS Code"),
         h("button", { class: "btn", onclick: (e) => openWith(it.id, "cursor", e.target) }, "Cursor"),
@@ -331,6 +331,127 @@
       }).catch((e) => { toast("刪除失敗：" + e.message); ok.disabled = false; ok.textContent = "移到垃圾桶"; });
   }
   function closeModal() { $("#modal").setAttribute("aria-hidden", "true"); }
+
+  // ---------------------------------------------------------------- 摘要：網頁上直接改
+  function summaryEditable(rec) {
+    const wrap = h("div", {});
+    const pending = rec.summarySource === "pending";
+    const view = () => {
+      wrap.replaceChildren(
+        h("p", { class: `d-summary ${pending ? "is-pending" : ""}` }, rec.summary || "尚未撰寫摘要"),
+        h("div", { class: "d-src" }, SUMSRC[rec.summarySource] || "", " ",
+          h("button", { class: "btn btn--small", onclick: edit }, "改摘要"),
+          rec.summarySource === "user" && h("button", { class: "btn btn--small", style: "margin-left:6px", onclick: () => saveSummary(rec, "") }, "交還給 agent")));
+    };
+    const edit = () => {
+      const ta = h("textarea", { class: "d-summary-edit" });
+      ta.value = rec.summary || "";
+      wrap.replaceChildren(ta, h("div", { class: "d-summary-actions" },
+        h("button", { class: "btn btn--primary btn--small", onclick: () => saveSummary(rec, ta.value) }, "儲存摘要"),
+        h("button", { class: "btn btn--small", onclick: view }, "取消")));
+      ta.focus();
+    };
+    view();
+    return wrap;
+  }
+  function saveSummary(rec, text) {
+    return api("../api/summary", { id: rec.id, summary: text }).then((res) => {
+      toast(res.ok ? (res.locked ? "摘要已儲存，agent 之後不會覆蓋這一筆。" : "已交還給 agent，下次 inventory-summarize 會重寫。") : "儲存失敗：" + (res.error || ""));
+      return reload().then(() => reopen(rec.id));
+    });
+  }
+  function reopen(id) {
+    const it = state.data.items[id]; if (it) return openDrawer(it);
+    const p = state.data.projects?.[id]; if (p) return openProject(p);
+    closeDrawer();
+  }
+  function api(url, payload) {
+    return fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "X-Requested-With": "agent-inventory" }, body: JSON.stringify(payload) })
+      .then((r) => r.json()).catch((e) => ({ ok: false, error: "連不到 serve.py：" + e.message }));
+  }
+
+  // ---------------------------------------------------------------- 檔案編輯器（CodeMirror 6，離線退回純文字）
+  const ed = { open: false, item: null, hash: "", dirty: false, get: null, set: null, view: null };
+  let cmPromise = null;
+  function loadCodeMirror() {
+    // CodeMirror 6 的各套件必須共用同一份 @codemirror/state，否則會出現「Unrecognized extension value」。
+    // 用 esm.sh 的 ?deps= 把兩個入口釘到同一組相依版本，就只會載入一份。
+    const deps = "@codemirror/state@6.7.4,@codemirror/view@6.43.11,@codemirror/language@6.12.4";
+    if (!cmPromise) cmPromise = Promise.all([
+      import(`https://esm.sh/codemirror@6.0.2?deps=${deps}`),
+      import(`https://esm.sh/@codemirror/lang-markdown@6.5.2?deps=${deps}`),
+    ]).then(([cm, md]) => ({ cm, md })).catch((e) => { cmPromise = null; throw e; });
+    return cmPromise;
+  }
+  async function openEditor(it) {
+    const box = $("#editor"), body = $("#editorBody"), status = $("#editorStatus");
+    $("#editorName").textContent = it.name; $("#editorPath").textContent = ""; $("#editorShared").textContent = ""; status.textContent = "載入中…";
+    body.replaceChildren(); $("#editorSave").disabled = true;
+    box.setAttribute("aria-hidden", "false"); document.body.style.overflow = "hidden";
+    const res = await fetch(`../api/read?id=${encodeURIComponent(it.id)}`).then((r) => r.json()).catch(() => ({ ok: false, error: "連不到 serve.py" }));
+    if (!res.ok) { status.textContent = res.error || "讀取失敗"; return; }
+    ed.item = it; ed.hash = res.hash; ed.dirty = false; ed.open = true;
+    $("#editorPath").textContent = res.path;
+    const shared = state.data.tools.filter((t) => (res.sharedWith || []).includes(t.id)).map((t) => t.name);
+    $("#editorShared").textContent = shared.length > 1 ? `共用於 ${shared.join("、")}，存檔後全部生效` : "";
+    const markDirty = () => { if (!ed.dirty) { ed.dirty = true; $("#editorSave").disabled = false; } status.textContent = "未儲存"; status.classList.add("is-dirty"); };
+    try {
+      const { cm, md } = await loadCodeMirror();
+      const ev = new cm.EditorView({
+        doc: res.content,
+        extensions: [cm.basicSetup, md.markdown(), cm.EditorView.lineWrapping,
+          cm.EditorView.updateListener.of((u) => { if (u.docChanged) markDirty(); })],
+        parent: body,
+      });
+      ed.view = ev; ed.get = () => ev.state.doc.toString(); ed.set = (txt) => ev.dispatch({ changes: { from: 0, to: ev.state.doc.length, insert: txt } });
+      status.textContent = "CodeMirror"; status.classList.remove("is-dirty");
+      ev.focus();
+    } catch (e) {
+      // 離線或 CDN 被擋：純文字編輯器
+      const gutter = h("div", { class: "editor__gutter" });
+      const ta = h("textarea", { class: "editor__ta", spellcheck: "false" });
+      ta.value = res.content;
+      const lines = () => { gutter.textContent = Array.from({ length: ta.value.split("\n").length }, (_, i) => i + 1).join("\n"); };
+      ta.addEventListener("input", () => { lines(); markDirty(); });
+      ta.addEventListener("scroll", () => { gutter.scrollTop = ta.scrollTop; });
+      ta.addEventListener("keydown", (k) => {
+        if (k.key === "Tab") { k.preventDefault(); const s = ta.selectionStart, e2 = ta.selectionEnd; ta.value = ta.value.slice(0, s) + "  " + ta.value.slice(e2); ta.selectionStart = ta.selectionEnd = s + 2; ta.dispatchEvent(new Event("input")); }
+        if ((k.metaKey || k.ctrlKey) && k.key === "s") { k.preventDefault(); saveEditor(); }
+      });
+      body.replaceChildren(h("div", { class: "editor__plain" }, gutter, ta));
+      lines(); ed.view = null; ed.get = () => ta.value; ed.set = (txt) => { ta.value = txt; lines(); };
+      status.textContent = "純文字模式（CodeMirror 無法載入：" + (e && e.message ? e.message.slice(0, 80) : "離線") + "）"; status.classList.remove("is-dirty");
+      console.warn("CodeMirror 載入失敗，改用純文字編輯器", e);
+      ta.focus();
+    }
+  }
+  async function saveEditor() {
+    if (!ed.open || !ed.dirty) return;
+    const status = $("#editorStatus"); status.textContent = "儲存中…";
+    const res = await api("../api/save", { id: ed.item.id, content: ed.get(), hash: ed.hash });
+    if (!res.ok) {
+      status.textContent = res.error || "儲存失敗"; status.classList.add("is-dirty");
+      if (res.hash) toast(res.error);
+      return;
+    }
+    ed.hash = res.hash; ed.dirty = false; $("#editorSave").disabled = true;
+    status.textContent = "已儲存 " + new Date().toLocaleTimeString("zh-TW", { hour12: false }); status.classList.remove("is-dirty");
+    toast("已存回原檔並重新掃描。這個檔的摘要會標為待更新，下次 inventory-summarize 補上。");
+    await reload();
+  }
+  function closeEditor(force) {
+    if (!ed.open) return;
+    if (ed.dirty && !force && !confirm("有尚未儲存的修改，確定要關閉嗎？")) return;
+    ed.open = false; ed.dirty = false;
+    if (ed.view) { ed.view.destroy(); ed.view = null; }
+    $("#editor").setAttribute("aria-hidden", "true");
+    document.body.style.overflow = $("#drawer").getAttribute("aria-hidden") === "false" ? "hidden" : "";
+    reopen(ed.item?.id);
+  }
+  $("#editorCancel").addEventListener("click", () => closeEditor(false));
+  $("#editorSave").addEventListener("click", saveEditor);
+  window.addEventListener("beforeunload", (e) => { if (ed.open && ed.dirty) { e.preventDefault(); e.returnValue = ""; } });
+  document.addEventListener("keydown", (e) => { if (ed.open && (e.metaKey || e.ctrlKey) && e.key === "s") { e.preventDefault(); saveEditor(); } }, true);
   function toast(msg) {
     let el = $("#toast");
     if (!el) { el = h("div", { id: "toast", class: "toast" }); document.body.append(el); }

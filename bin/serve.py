@@ -169,6 +169,43 @@ def folder_info(path: Path, cap: int = 200000) -> dict:
     return {"files": files, "bytes": size, "capped": False}
 
 
+import hashlib
+from datetime import datetime
+
+BACKUPS = DATA / "backups"
+USER_SUMMARIES = DATA / "user-summaries.json"
+KEEP_BACKUPS = 10
+
+
+def file_hash(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()[:16]
+
+
+def editable_path(rec: dict) -> Path | None:
+    """The real file behind an item (symlinks resolved), so one save reaches every tool that shares it."""
+    raw = rec.get("realPath") or rec.get("path")
+    if not raw:
+        return None
+    p = expand_home(raw)
+    return p if p.is_file() else None
+
+
+def backup(path: Path, item_id: str):
+    BACKUPS.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    (BACKUPS / f"{item_id}-{stamp}{path.suffix or '.md'}").write_bytes(path.read_bytes())
+    olds = sorted(BACKUPS.glob(f"{item_id}-*"))
+    for old in olds[:-KEEP_BACKUPS]:
+        old.unlink(missing_ok=True)
+
+
+def load_user_summaries() -> dict:
+    try:
+        return json.loads(USER_SUMMARIES.read_text(encoding="utf-8")) if USER_SUMMARIES.is_file() else {}
+    except json.JSONDecodeError:
+        return {}
+
+
 class Handler(SimpleHTTPRequestHandler):
     def do_OPTIONS(self):  # no CORS headers → cross-origin pages cannot call the mutating endpoints
         self.send_response(403)
@@ -176,7 +213,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         u = urlparse(self.path)
-        if u.path != "/api/delete":
+        if u.path not in ("/api/delete", "/api/save", "/api/summary"):
             return self._json(404, {"ok": False, "error": "not found"})
         if self.headers.get("X-Requested-With") != "agent-inventory" or "application/json" not in (self.headers.get("Content-Type") or ""):
             return self._json(400, {"ok": False, "error": "缺少必要標頭"})
@@ -185,6 +222,10 @@ class Handler(SimpleHTTPRequestHandler):
         except (ValueError, json.JSONDecodeError):
             return self._json(400, {"ok": False, "error": "JSON 格式錯誤"})
         inv = load_inventory()
+        if u.path == "/api/save":
+            return self._save(inv, body)
+        if u.path == "/api/summary":
+            return self._summary(inv, body)
         item_id = str(body.get("id", ""))
         rec = inv.get("items", {}).get(item_id)
         kind = "item"
@@ -206,8 +247,65 @@ class Handler(SimpleHTTPRequestHandler):
             stats = {"error": str(e)}
         return self._json(200, {"ok": all(r["ok"] for r in results), "results": results, "stats": stats})
 
+    def _save(self, inv: dict, body: dict):
+        item_id = str(body.get("id", ""))
+        rec = inv.get("items", {}).get(item_id)
+        if not rec or rec.get("kind") == "note":
+            return self._json(404, {"ok": False, "error": "找不到這個項目"})
+        path = editable_path(rec)
+        if path is None:
+            return self._json(404, {"ok": False, "error": "檔案已不存在"})
+        current = path.read_bytes()
+        if body.get("hash") and body["hash"] != file_hash(current):
+            return self._json(409, {"ok": False, "error": "這個檔案在你開始編輯後被其他程式改過了。請重新載入再改，避免覆蓋別人的修改。", "hash": file_hash(current)})
+        content = body.get("content")
+        if not isinstance(content, str):
+            return self._json(400, {"ok": False, "error": "缺少內容"})
+        try:
+            backup(path, item_id)
+            path.write_text(content, encoding="utf-8")
+        except OSError as e:
+            return self._json(500, {"ok": False, "error": f"寫入失敗：{e}"})
+        new_hash = file_hash(content.encode("utf-8"))
+        try:
+            stats = rescan()
+        except Exception as e:
+            stats = {"error": str(e)}
+        return self._json(200, {"ok": True, "hash": new_hash, "path": str(path), "stats": stats})
+
+    def _summary(self, inv: dict, body: dict):
+        item_id = str(body.get("id", ""))
+        rec = inv.get("items", {}).get(item_id) or inv.get("projects", {}).get(item_id)
+        if not rec:
+            return self._json(404, {"ok": False, "error": "找不到這個項目"})
+        text = str(body.get("summary", "")).strip()
+        us = load_user_summaries()
+        if text:
+            us[item_id] = {"summary": text, "at": datetime.now().astimezone().isoformat(timespec="seconds"), "name": rec.get("name")}
+        else:
+            us.pop(item_id, None)  # empty = hand it back to the agent
+        DATA.mkdir(parents=True, exist_ok=True)
+        USER_SUMMARIES.write_text(json.dumps(us, ensure_ascii=False, indent=1), encoding="utf-8")
+        try:
+            stats = rescan()
+        except Exception as e:
+            stats = {"error": str(e)}
+        return self._json(200, {"ok": True, "locked": bool(text), "stats": stats})
+
     def do_GET(self):
         u = urlparse(self.path)
+        if u.path == "/api/read":
+            q = parse_qs(u.query)
+            inv = load_inventory()
+            rec = inv.get("items", {}).get(q.get("id", [""])[0])
+            if not rec or rec.get("kind") == "note":
+                return self._json(404, {"ok": False, "error": "找不到這個項目"})
+            path = editable_path(rec)
+            if path is None:
+                return self._json(404, {"ok": False, "error": "檔案已不存在"})
+            data = path.read_bytes()
+            return self._json(200, {"ok": True, "path": str(path), "content": data.decode("utf-8", errors="replace"), "hash": file_hash(data),
+                                    "sharedWith": rec.get("tools", [])})
         if u.path == "/api/info":
             q = parse_qs(u.query)
             inv = load_inventory()

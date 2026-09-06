@@ -64,9 +64,10 @@ def load_config(args) -> dict:
 # ---------------------------------------------------------------- items
 
 class Inventory:
-    def __init__(self, cache: dict):
+    def __init__(self, cache: dict, user_summaries: dict | None = None):
         self.items: dict[str, dict] = {}
         self.cache = cache
+        self.user_summaries = user_summaries or {}  # id → {summary}, written by the website, never overwritten by agents
         self.pending: dict[str, dict] = {}
         self.projects: dict[str, dict] = {}
 
@@ -92,10 +93,16 @@ class Inventory:
                     break
         h = content_hash(("|".join(hasher) + str(path)).encode())
         cached = self.cache.get(h)
-        summary = cached["summary"] if cached and cached.get("summary") else ""
+        user = self.user_summaries.get(pid)
+        if user and user.get("summary"):
+            summary, ssrc = user["summary"], "user"
+        elif cached and cached.get("summary"):
+            summary, ssrc = cached["summary"], "agent"
+        else:
+            summary, ssrc = "", "pending"
         self.projects[pid] = {
             "id": pid, "name": name, "path": display_path(path), "realPath": display_path(path.resolve()),
-            "summary": summary, "summarySource": "agent" if summary else "pending", "hash": h,
+            "summary": summary, "summarySource": ssrc, "hash": h,
             "tools": [], "rules": 0, "skills": 0,
         }
         if not summary:
@@ -149,7 +156,10 @@ class Inventory:
         trigger = self._trigger(fm)
         imports, import_text, import_only = self._imports(real, body if body.strip() else text) if kind == "rule" else ([], "", False)
         cached = self.cache.get(h)
-        if cached and cached.get("summary"):
+        user = self.user_summaries.get(iid)
+        if user and user.get("summary"):
+            summary, ssrc = user["summary"], "user"
+        elif cached and cached.get("summary"):
             summary, ssrc = cached["summary"], cached.get("source", "agent")
         elif import_only:
             summary, ssrc = f"這個檔案只引用同目錄的 {'、'.join(imports)}，規則內容以被引用的檔案為準。", "import"
@@ -363,7 +373,9 @@ def run(cfg: dict, usage: dict | None = None) -> dict:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     cache_path = DATA_DIR / "summary-cache.json"
     cache = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.is_file() else {}
-    inv = Inventory(cache)
+    us_path = DATA_DIR / "user-summaries.json"
+    user_summaries = json.loads(us_path.read_text(encoding="utf-8")) if us_path.is_file() else {}
+    inv = Inventory(cache, user_summaries)
     specs = adapters.get(cfg["tools"])
     exclude = set(cfg["exclude"])
 

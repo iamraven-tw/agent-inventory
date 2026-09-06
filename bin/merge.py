@@ -44,12 +44,17 @@ def main():
     cache = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.is_file() else {}
     summaries, files = load_batches()
 
-    applied, unknown = 0, []
+    us_path = DATA / "user-summaries.json"
+    user_ids = set(json.loads(us_path.read_text(encoding="utf-8")).keys()) if us_path.is_file() else set()
+    applied, unknown, kept = 0, [], 0
     now = datetime.now().astimezone().isoformat(timespec="seconds")
     for iid, text in summaries.items():
         item = inv["items"].get(iid) or inv.get("projects", {}).get(iid)
         if not item:
             unknown.append(iid)
+            continue
+        if iid in user_ids:  # the user edited this one on the website; agents never overwrite it
+            kept += 1
             continue
         item["summary"] = text
         item["summarySource"] = "agent"
@@ -72,7 +77,7 @@ def main():
     for f in files:
         f.rename(done / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{f.name}")
 
-    print(f"已套用 {applied} 筆摘要，快取共 {len(cache)} 筆，尚待補 {len(pending)} 筆。")
+    print(f"已套用 {applied} 筆摘要，快取共 {len(cache)} 筆，尚待補 {len(pending)} 筆。" + (f" 另有 {kept} 筆是使用者手改的摘要，保留不覆蓋。" if kept else ""))
     if unknown:
         print(f"有 {len(unknown)} 個 id 在 inventory 裡找不到（可能已重新掃描）：{', '.join(unknown[:5])}", file=sys.stderr)
 
