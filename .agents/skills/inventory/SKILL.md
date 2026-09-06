@@ -9,7 +9,7 @@ description: 盤點這台電腦上所有 AI agent（Claude Code、Codex、Antigr
 
 ## 開始前先畫流程圖
 
-先用 Mermaid 向使用者說明接下來會做的四步，並標出唯一會停下來問人的地方（setup）：
+先用 Mermaid 向使用者說明接下來會做的五步，並標出會停下來問人的地方：setup 一定會問；flow 只在待補流程圖很多時問一次要全畫還是只畫常用的：
 
 ```mermaid
 flowchart TD
