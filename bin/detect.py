@@ -144,11 +144,12 @@ def main():
     projects |= set(find_projects(COMMON_ROOTS, depth=4))
     projects = sorted(projects)
     roots = suggest_roots(projects)
-    result = {"home": display_path(HOME), "tools": tools, "candidateRoots": roots,
+    result = {"home": display_path(HOME), "repoRoot": str(REPO), "tools": tools, "candidateRoots": roots,
               "projects": [display_path(p) for p in projects]}
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=1))
         return
+    print(f"agent-inventory 位置（寫進設定檔 repoRoot）：{REPO}")
     print("偵測到的 AI agent 工具：")
     for t in tools:
         print(f"  [{'x' if t['installed'] else ' '}] {t['id']:<12} {t['name']}" + (f"  ← {', '.join(t['evidence'])}" if t["evidence"] else ""))

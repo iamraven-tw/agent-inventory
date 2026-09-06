@@ -24,4 +24,16 @@ link_into() {  # $1 = 目標技能目錄
 [ -d "$HOME/.gemini/antigravity" ] && { echo "Google Antigravity"; link_into "$HOME/.gemini/antigravity/skills"; }
 [ -d "$HOME/.hermes" ]   && { echo "Hermes Agent";  link_into "$HOME/.hermes/skills"; }
 [ -d "$HOME/.cursor" ] && [ ! -d "$HOME/.codex" ] && { echo "Cursor"; link_into "$HOME/.agents/skills"; }
+# 把這份 clone 的絕對路徑寫進設定檔的 repoRoot；技能被連結到全域目錄後，agent 從任何目錄都找得到 bin/ 與 data/。
+CFG="${AGENT_INVENTORY_CONFIG:-$HOME/.config/agent-inventory/config.json}"
+mkdir -p "$(dirname "$CFG")"
+python3 - "$CFG" "$REPO" <<'EOS'
+import json, os, sys
+cfg_path, repo = sys.argv[1], sys.argv[2]
+cfg = json.load(open(cfg_path, encoding="utf-8")) if os.path.isfile(cfg_path) else {}
+cfg["repoRoot"] = repo
+with open(cfg_path, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, ensure_ascii=False, indent=2); f.write("\n")
+print(f"  repoRoot = {repo} → {cfg_path}")
+EOS
 echo "完成。重新開啟你的 agent 工作階段後即可使用 /inventory。"

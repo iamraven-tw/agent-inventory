@@ -7,12 +7,20 @@ description: agent-inventory 的最後一步：用內建的 Python http.server �
 
 ## 執行
 
+先取得 `$REPO`（agent-inventory 的 clone 目錄）。所有指令與 `data/` 路徑都用它當前綴，從任何目錄執行都可以，不需要 cd：
+
 ```bash
-python3 bin/serve.py
+REPO="$(python3 -c 'import json,os;p=os.path.expanduser(os.environ.get("AGENT_INVENTORY_CONFIG","~/.config/agent-inventory/config.json"));print(json.load(open(p)).get("repoRoot","") if os.path.isfile(p) else "")')"; [ -z "$REPO" ] && [ -f bin/scan.py ] && REPO="$PWD"; echo "REPO=$REPO"
+```
+
+印出空白代表兩邊都找不到：問使用者 clone 放在哪，之後由 `inventory-setup` 寫進設定檔的 `repoRoot`。
+
+```bash
+python3 "$REPO/bin/serve.py"
 ```
 
 - 預設 port 8765，會自動開瀏覽器到 `http://localhost:8765/site/`。
-- port 被占用時：`python3 bin/serve.py --port 9000`。
+- port 被占用時：`python3 "$REPO/bin/serve.py" --port 9000`。
 - 不想自動開瀏覽器：加 `--no-open`。
 - 這是前景程式，會一直跑到使用者按 Ctrl+C。若你的工具支援背景執行或有內建瀏覽器預覽，用那個方式啟動，不要卡住對話。
 
@@ -30,4 +38,4 @@ python3 bin/serve.py
 
 ## 回報
 
-給使用者網址，並提醒：資料都在本機 `data/` 裡，重新掃描用 `/inventory-scan`，有改過的檔案才會重寫摘要。
+給使用者網址，並提醒：資料都在本機 `$REPO/data/` 裡，重新掃描用 `/inventory-scan`，有改過的檔案才會重寫摘要。

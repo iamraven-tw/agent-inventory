@@ -28,9 +28,11 @@ import usage as usage_mod  # noqa: E402  (bin/usage.py, same directory)
 from adapters.base import (  # noqa: E402
     HOME, SKIP_DIRS, content_hash, display_path, expand, find_skill_files, iso_mtime,
     parse_frontmatter, path_id, resolve_rule_entry,
+    config_path,
+    remember_repo_root,
 )
 
-CONFIG_PATH = expand(os.environ.get("AGENT_INVENTORY_CONFIG", "~/.config/agent-inventory/config.json"))
+CONFIG_PATH = config_path()
 DATA_DIR = REPO / "data"
 EXCERPT_CHARS = 2500
 SKILL_EXCERPT_CHARS = 500
@@ -104,8 +106,8 @@ def load_config(args) -> dict:
     cfg.setdefault("exclude", DEFAULT_EXCLUDE)
     cfg.setdefault("language", "zh-TW")
     cfg.setdefault("pathAliases", [])
-    if not cfg["projectRoots"] and not CONFIG_PATH.is_file():
-        print("尚未設定。請先執行 inventory-setup 技能，或用 --roots 指定專案根目錄。", file=sys.stderr)
+    if not cfg["projectRoots"]:
+        print("尚未設定專案根目錄。請先執行 inventory-setup 技能，或用 --roots 指定。", file=sys.stderr)
     return cfg
 
 
@@ -533,6 +535,7 @@ def main():
     ap.add_argument("--no-usage", action="store_true", help="skip collecting usage logs (reuse data/usage.json if present)")
     args = ap.parse_args()
     cfg = load_config(args)
+    remember_repo_root(REPO)  # 讓被安裝到全域目錄的技能之後找得到這份 clone
     usage_path = DATA_DIR / "usage.json"
     if args.no_usage:
         usage = json.loads(usage_path.read_text(encoding="utf-8")) if usage_path.is_file() else {}

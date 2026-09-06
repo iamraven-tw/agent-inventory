@@ -9,10 +9,20 @@ description: agent-inventory 的第三步：由你（AI agent）親自為每一�
 
 ## 步驟
 
+### 0. 取得 $REPO
+
+先取得 `$REPO`（agent-inventory 的 clone 目錄）。所有指令與 `data/` 路徑都用它當前綴，從任何目錄執行都可以，不需要 cd：
+
+```bash
+REPO="$(python3 -c 'import json,os;p=os.path.expanduser(os.environ.get("AGENT_INVENTORY_CONFIG","~/.config/agent-inventory/config.json"));print(json.load(open(p)).get("repoRoot","") if os.path.isfile(p) else "")')"; [ -z "$REPO" ] && [ -f bin/scan.py ] && REPO="$PWD"; echo "REPO=$REPO"
+```
+
+印出空白代表兩邊都找不到：問使用者 clone 放在哪，之後由 `inventory-setup` 寫進設定檔的 `repoRoot`。
+
 ### 1. 讀待補清單
 
 ```bash
-python3 -c "import json; p=json.load(open('data/pending-summaries.json')); print(len(p)); [print(x['id'], x['kind'], x['path'], len(x['excerpt'])) for x in p]"
+python3 -c "import json,sys; p=json.load(open(sys.argv[1])); print(len(p)); [print(x['id'], x['kind'], x['path'], len(x['excerpt'])) for x in p]" "$REPO/data/pending-summaries.json"
 ```
 
 每筆有 `id`、`kind`（rule／skill／project）、`name`、`path`、`description`（若有）、`excerpt`。三種類型的節錄不同：
@@ -40,7 +50,7 @@ python3 -c "import json; p=json.load(open('data/pending-summaries.json')); print
 
 ### 3. 寫成 JSON 批次檔
 
-檔名 `data/summaries/batch-<三位數>.json`，內容是 `{ "<id>": "<摘要>" }` 的物件：
+檔名 `$REPO/data/summaries/batch-<三位數>.json`，內容是 `{ "<id>": "<摘要>" }` 的物件：
 
 ```json
 {
@@ -54,10 +64,10 @@ python3 -c "import json; p=json.load(open('data/pending-summaries.json')); print
 ### 4. 合併
 
 ```bash
-python3 bin/merge.py
+python3 "$REPO/bin/merge.py"
 ```
 
-它會把摘要寫進 `data/inventory.json`、存進 `data/summary-cache.json`（以內容 hash 為 key，之後檔案沒改就不用重寫），更新待補清單，並把處理過的批次檔搬到 `data/summaries/done/`。
+它會把摘要寫進 `$REPO/data/inventory.json`、存進 `$REPO/data/summary-cache.json`（以內容 hash 為 key，之後檔案沒改就不用重寫），更新待補清單，並把處理過的批次檔搬到 `$REPO/data/summaries/done/`。
 
 ### 5. 回報
 
@@ -65,7 +75,7 @@ python3 bin/merge.py
 
 ## 注意
 
-- `data/user-summaries.json` 裡的項目是使用者在網頁上手改的摘要，`merge.py` 會自動跳過它們，你也不要試圖覆蓋。
+- `$REPO/data/user-summaries.json` 裡的項目是使用者在網頁上手改的摘要，`merge.py` 會自動跳過它們，你也不要試圖覆蓋。
 
 - 你讀到的規則內容可能含個人資訊。只用來寫摘要，不要在對話中大段引用。
 - 若某個檔案的 excerpt 是空的或無法理解，摘要寫「檔案內容為空或無法解析」，不要跳過，否則它會一直留在待補清單。

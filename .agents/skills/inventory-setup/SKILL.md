@@ -7,13 +7,24 @@ description: agent-inventory 的第一步：偵測這台電腦裝了哪些 AI ag
 
 ## 步驟
 
+### 0. 取得 $REPO
+
+先取得 `$REPO`（agent-inventory 的 clone 目錄）。所有指令與 `data/` 路徑都用它當前綴，從任何目錄執行都可以，不需要 cd：
+
+```bash
+REPO="$(python3 -c 'import json,os;p=os.path.expanduser(os.environ.get("AGENT_INVENTORY_CONFIG","~/.config/agent-inventory/config.json"));print(json.load(open(p)).get("repoRoot","") if os.path.isfile(p) else "")')"; [ -z "$REPO" ] && [ -f bin/scan.py ] && REPO="$PWD"; echo "REPO=$REPO"
+```
+
+印出空白代表兩邊都找不到：問使用者 clone 放在哪，第 3 小節就會把它寫進設定檔的 `repoRoot`。
+
 ### 1. 跑偵測腳本
 
 ```bash
-python3 bin/detect.py --json
+python3 "$REPO/bin/detect.py" --json
 ```
 
 輸出包含：
+- `repoRoot`：這份 clone 的絕對路徑，原樣寫進設定檔。
 - `tools[]`：六個支援的工具，各有 `installed`（是否偵測到）與 `evidence`（憑什麼判斷）。
 - `candidateRoots[]`：候選專案根目錄，附底下含規則或技能的專案數，已排除工具自己的家目錄、Library、node_modules、Go 套件快取。
 - `projects[]`：實際找到的專案資料夾清單。
@@ -43,6 +54,7 @@ mkdir -p ~/.config/agent-inventory
 
 ```json
 {
+  "repoRoot": "/絕對路徑/agent-inventory",
   "tools": ["claude-code", "codex", "antigravity", "cursor", "openclaw", "hermes"],
   "projectRoots": ["~/Developer", "~/Projects"],
   "scanDepth": 4,
@@ -50,6 +62,7 @@ mkdir -p ~/.config/agent-inventory
 }
 ```
 
+- `repoRoot` 直接用 `detect.py` 印出的值（絕對路徑，不用 `~`）；設定檔已存在時保留其他欄位，只更新要改的鍵。
 - `tools` 只放使用者選的 id（合法值：`claude-code`、`codex`、`antigravity`、`cursor`、`openclaw`、`hermes`）。
 - `projectRoots` 用 `~` 開頭的相對家目錄寫法，方便日後換機器。
 - `scanDepth` 預設 4；使用者的專案巢狀很深時可以調到 5 或 6，但會變慢。

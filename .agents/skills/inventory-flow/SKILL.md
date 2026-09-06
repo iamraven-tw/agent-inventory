@@ -9,10 +9,20 @@ description: agent-inventory 的第四步：為每個技能畫一張 Mermaid 流
 
 ## 步驟
 
+### 0. 取得 $REPO
+
+先取得 `$REPO`（agent-inventory 的 clone 目錄）。所有指令與 `data/` 路徑都用它當前綴，從任何目錄執行都可以，不需要 cd：
+
+```bash
+REPO="$(python3 -c 'import json,os;p=os.path.expanduser(os.environ.get("AGENT_INVENTORY_CONFIG","~/.config/agent-inventory/config.json"));print(json.load(open(p)).get("repoRoot","") if os.path.isfile(p) else "")')"; [ -z "$REPO" ] && [ -f bin/scan.py ] && REPO="$PWD"; echo "REPO=$REPO"
+```
+
+印出空白代表兩邊都找不到：問使用者 clone 放在哪，之後由 `inventory-setup` 寫進設定檔的 `repoRoot`。
+
 ### 1. 讀待補清單
 
 ```bash
-python3 -c "import json; p=json.load(open('data/pending-flows.json')); print(len(p)); [print(x['id'], x['name'], x['path']) for x in p[:40]]"
+python3 -c "import json,sys; p=json.load(open(sys.argv[1])); print(len(p)); [print(x['id'], x['name'], x['path']) for x in p[:40]]" "$REPO/data/pending-flows.json"
 ```
 
 每筆有 `id`、`name`、`path`、`description`（作者寫的說明）、`steps`。`steps` 是掃描器抽出來的骨架，三種前綴：
@@ -43,7 +53,7 @@ python3 -c "import json; p=json.load(open('data/pending-flows.json')); print(len
 
 ### 3. 寫成 JSON 批次檔
 
-檔名 `data/flows/batch-<三位數>.json`：
+檔名 `$REPO/data/flows/batch-<三位數>.json`：
 
 ```json
 {
@@ -66,10 +76,10 @@ python3 -c "import json; p=json.load(open('data/pending-flows.json')); print(len
 ### 4. 合併
 
 ```bash
-python3 bin/merge.py
+python3 "$REPO/bin/merge.py"
 ```
 
-它會把流程圖寫進 `data/inventory.json` 與 `data/flow-cache.json`（以檔案內容 hash 為 key，技能沒改就不用重畫），更新待補清單，並把批次檔搬到 `data/flows/done/`。
+它會把流程圖寫進 `$REPO/data/inventory.json` 與 `$REPO/data/flow-cache.json`（以檔案內容 hash 為 key，技能沒改就不用重畫），更新待補清單，並把批次檔搬到 `$REPO/data/flows/done/`。
 
 ### 5. 回報
 
@@ -77,7 +87,7 @@ python3 bin/merge.py
 
 ## 注意
 
-- `data/user-flows.json` 裡的是使用者在網頁上手改的流程圖，merge.py 會跳過，你不要覆蓋。
+- `$REPO/data/user-flows.json` 裡的是使用者在網頁上手改的流程圖，merge.py 會跳過，你不要覆蓋。
 - 不要把每個小標題都變成節點。一個技能只有一條主線，讀者要的是「我什麼時候得出手」。
 - 沒有把握哪一步需要人時，看 `steps` 裡 `!` 開頭的行；那是掃描器找出來的候選。
 - 流程圖語法錯誤時 merge.py 會擋下來（必須以 `flowchart` 或 `graph` 開頭），網站算不出圖時會退回顯示原始碼，不會整頁壞掉。

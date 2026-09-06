@@ -83,10 +83,10 @@ bin/serve.py             本機 http.server，含 /api/open（開檔）、/api/r
 adapters/                每個工具一個檔，宣告它讀哪些路徑；要支援新工具就加一個檔
 site/                    原生 HTML／CSS／JS，無打包
 data/                    掃描產物（.gitignore）：inventory.json、usage.json、summary-cache.json、flow-cache.json、usage-cache.json
-install.sh               選用：把技能 symlink 到各工具的全域技能目錄，讓 /inventory 在任何目錄都能用
+install.sh               選用：把技能 symlink 到各工具的全域技能目錄並寫入 config.json 的 repoRoot，讓 /inventory 在任何目錄都能用
 ```
 
-設定檔在 `~/.config/agent-inventory/config.json`，repo 內不含任何個人路徑。
+設定檔在 `~/.config/agent-inventory/config.json`，repo 內不含任何個人路徑。其中 `repoRoot` 是這份 clone 的絕對路徑：技能被複製或 symlink 到全域技能目錄後，agent 靠它找到 `bin/` 與 `data/`（`install.sh` 與 `inventory-setup` 會寫入，`scan.py` 每次執行也會更新）。所有腳本都以自身位置定位 `data/`，從任何目錄用絕對路徑執行結果都一樣。
 
 ## 新增一個工具
 

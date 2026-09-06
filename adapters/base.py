@@ -23,6 +23,7 @@ Any entry may carry "source" (user|plugin|builtin|compat|bundled) and "tag" (fre
 """
 from __future__ import annotations
 
+import json
 import hashlib
 import os
 import re
@@ -179,3 +180,29 @@ def resolve_rule_entry(base: Path, entry: dict) -> list[Path]:
                 return [p]
         return []
     return []
+
+
+# ---------------------------------------------------------------- config location
+
+def config_path() -> Path:
+    """~/.config/agent-inventory/config.json；可用環境變數 AGENT_INVENTORY_CONFIG 覆寫（測試或多份設定時用）。"""
+    return expand(os.environ.get("AGENT_INVENTORY_CONFIG", "~/.config/agent-inventory/config.json"))
+
+
+def remember_repo_root(repo: Path) -> None:
+    """把這份 clone 的絕對路徑寫進設定檔的 repoRoot。
+
+    技能被複製或 symlink 到全域技能目錄後，agent 從任何目錄都能靠 repoRoot 找到 bin/ 與 data/。
+    設定檔不存在時不建立（那是 inventory-setup 的工作）；寫入失敗一律忽略，不影響掃描。
+    """
+    p = config_path()
+    if not p.is_file():
+        return
+    try:
+        cfg = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(cfg, dict) or cfg.get("repoRoot") == str(repo):
+            return
+        cfg["repoRoot"] = str(repo)
+        p.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except (OSError, ValueError):
+        return
