@@ -24,9 +24,16 @@ python3 bin/scan.py --roots "~/Developer,~/Projects" --tools claude-code,codex -
 - 摘要分兩層：技能 frontmatter 有 `description` 就直接用；規則檔通常沒有，會列進 `data/pending-summaries.json`，由下一步的 agent 撰寫。之前寫過的摘要存在 `data/summary-cache.json`（以內容 hash 為 key），檔案沒改就直接沿用。
 - 只寫 `@AGENTS.md` 之類引用的 CLAUDE.md 會自動判定為「引用檔」，不需要另寫摘要。
 
+## 使用紀錄
+
+`scan.py` 預設會先執行 `bin/usage.py`，從本機 agent 的紀錄收集每個技能的呼叫次數、上次使用時間，以及每個專案有多少 agent 工作階段在裡面工作。第一次會讀完所有逐字稿（Codex 的 sessions 可能有幾 GB，需要幾十秒），之後以檔案大小與修改時間快取，只解析有變動的檔。加 `--no-usage` 可跳過收集、沿用上次的 `data/usage.json`。
+
+若使用者的工作區搬過家（例如從雲端同步資料夾搬到本機），舊紀錄的路徑會對不到現在的專案：請在 `~/.config/agent-inventory/config.json` 加 `"pathAliases": [["舊路徑前綴", "新路徑前綴"]]`。掃描結果若顯示大多數專案「無使用紀錄」，先檢查這一點。
+
 ## 輸出
 
 - `data/inventory.json`：網站的唯一資料來源。
+- `data/usage.json`：使用紀錄的原始統計（技能名稱、工作目錄）。
 - `data/pending-summaries.json`：待補摘要清單，每筆含 `id`、`name`、`path`、`excerpt`（最多 2500 字的內文節錄）。
 
 ## 回報格式

@@ -45,8 +45,17 @@
       <button class="chip" data-filter="shared">跨工具共用</button>
       <button class="chip" data-filter="user">自建</button>
       <button class="chip" data-filter="plugin">外掛 / 內建</button>
+      <button class="chip chip--warn" data-filter="unused">久未使用</button>
     </div>
+    <label class="sort">排序
+      <select id="sort">
+        <option value="name">名稱</option>
+        <option value="recent">最近使用</option>
+        <option value="count">使用次數</option>
+      </select>
+    </label>
   </section>
+  <p class="usage-note" id="usageNote"></p>
 
   <section class="tool" id="tool"></section>
 </main>
@@ -58,6 +67,18 @@
     <div class="drawer__body" id="drawerBody"></div>
   </div>
 </aside>
+
+<div class="modal" id="modal" aria-hidden="true">
+  <div class="modal__scrim" id="modalScrim"></div>
+  <div class="modal__box" role="alertdialog" aria-modal="true" aria-labelledby="modalTitle">
+    <h3 class="modal__title" id="modalTitle">確認刪除</h3>
+    <div class="modal__body" id="modalBody"></div>
+    <div class="modal__actions">
+      <button class="btn" id="modalCancel">取消</button>
+      <button class="btn btn--danger" id="modalConfirm" disabled>移到垃圾桶</button>
+    </div>
+  </div>
+</div>
 
 <footer class="colophon">
   <span>agent-inventory · 資料只在本機，沒有任何內容離開這台電腦。</span>

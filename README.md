@@ -58,6 +58,8 @@ python3 bin/serve.py                           # 開網站
 - **引用檔**：只寫 `@AGENTS.md` 的 `CLAUDE.md` 自動判定為引用，不另寫摘要。
 - **摘要快取**：`data/summary-cache.json` 以內容 hash 為 key，檔案沒改就不重寫。
 - **專案摘要**：每個專案除了列出規則與技能，還有一段說明專案目的的摘要，取材自該資料夾的 README 與規則檔。
+- **使用紀錄**：`bin/usage.py` 讀本機 agent 留下的紀錄（Claude Code 的 history 與逐字稿、Codex 的 sessions、Hermes 的 state.db），技能依名稱對應呼叫次數與上次使用時間，專案依 agent 工作階段的工作目錄對應；沒有紀錄的退回檔案修改時間與 git 最後 commit。網站可篩「久未使用」（預設 90 天）並依最近使用或次數排序。Antigravity 的對話是二進位資料庫，目前無法對應；Cursor 與 OpenClaw 尚未實作。工作區搬過家時，在 config.json 加 `pathAliases`（`[["舊路徑前綴", "新路徑前綴"]]`）讓舊紀錄也算進去。
+- **刪除**：抽屜的「刪除…」會先列出實際會動到的路徑、受影響的工具，專案與跨工具共用的技能要輸入名稱才能按；一律**移到系統垃圾桶**（macOS 垃圾桶、Windows 資源回收筒、Linux gio trash），symlink 只移除連結本身，刪完自動重掃。
 - **開檔**：卡片抽屜可用系統內建文字編輯器（macOS 的「文字編輯」、Windows 的記事本）、Finder 或檔案總管、VS Code、Cursor 開啟該檔，由 `bin/serve.py` 的 `/api/open` 端點在本機執行，只接受 inventory 裡列出的檔案。
 - **未安裝的工具**：仍會列出它「如果安裝了」會讀到的共用目錄內容，網站上灰掉並標「未偵測到」。
 
@@ -72,10 +74,11 @@ Cursor 與 OpenClaw 的路徑來自官方文件（[Cursor Rules](https://cursor.
 bin/detect.py            偵測已安裝工具與候選專案根目錄
 bin/scan.py              掃描 → data/inventory.json、data/pending-summaries.json
 bin/merge.py             把 agent 寫的摘要合併進 inventory 與快取
-bin/serve.py             本機 http.server
+bin/usage.py             從本機 agent 紀錄收集技能與專案的使用次數、上次使用時間
+bin/serve.py             本機 http.server，含 /api/open（開檔）、/api/info、/api/delete（移到垃圾桶）
 adapters/                每個工具一個檔，宣告它讀哪些路徑；要支援新工具就加一個檔
 site/                    原生 HTML／CSS／JS，無打包
-data/                    掃描產物（.gitignore）
+data/                    掃描產物（.gitignore）：inventory.json、usage.json、summary-cache.json、usage-cache.json
 install.sh               選用：把技能 symlink 到各工具的全域技能目錄，讓 /inventory 在任何目錄都能用
 ```
 

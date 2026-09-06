@@ -19,7 +19,9 @@
   };
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-  const state = { data: null, tool: null, filter: "all", q: "" };
+  const state = { data: null, tool: null, filter: "all", q: "", sort: "name" };
+  const DAY = 86400000;
+  const staleMs = () => (state.data?.usageWindowDays || 90) * DAY;
   const KIND = { rule: "規則", skill: "技能", note: "說明" };
   const SOURCE = { user: "自建", plugin: "外掛", builtin: "內建", bundled: "內附", compat: "相容讀取" };
   const SUMSRC = { frontmatter: "摘要來源：技能 frontmatter 的 description", agent: "摘要來源：AI agent 讀檔撰寫", import: "摘要來源：自動判定為引用檔", note: "", pending: "尚未撰寫摘要，請執行 inventory-summarize 技能" };
@@ -40,8 +42,25 @@
     const s = data.stats;
     $("#lede").textContent = `這台電腦上有 ${s.installedTools} 個 AI agent 工具，共載入 ${s.rules} 條規則與 ${s.skills} 個技能；其中 ${s.shared} 個項目透過 symlink 或共用目錄同時餵給多個工具。點任何卡片可看完整摘要與路徑。`;
     $("#configLine").textContent = `掃描根目錄 ${data.config.projectRoots.join("、")} · 深度 ${data.config.scanDepth}`;
-    renderStats(); renderMatrix(); renderNav(); bindToolbar(); renderTool();
+    renderUsageNote();
+    renderStats(); renderMatrix(); renderNav(); renderTool();
+    if (!state.bound) { bindToolbar(); state.bound = true; }
     $("#app").hidden = false;
+  }
+  function reload() {
+    return fetch("../data/inventory.json", { cache: "no-store" }).then((r) => r.json()).then((data) => {
+      state.data = data;
+      if (!data.tools.some((t) => t.id === state.tool)) state.tool = data.tools[0]?.id;
+      renderUsageNote(); renderStats(); renderMatrix(); renderNav(); renderTool();
+    });
+  }
+  function renderUsageNote() {
+    const src = state.data.usageSources || {};
+    const on = state.data.tools.filter((t) => src[t.id]?.available).map((t) => t.name);
+    const off = state.data.tools.filter((t) => t.installed && src[t.id] && !src[t.id].available).map((t) => t.name);
+    $("#usageNote").textContent = on.length
+      ? `使用紀錄來源：${on.join("、")}${off.length ? `；無法取得：${off.join("、")}` : ""}。技能依名稱對應各工具的呼叫紀錄，專案依工作目錄對應 agent 工作階段；沒有紀錄的項目退回顯示檔案修改時間。`
+      : "尚未收集使用紀錄。執行 python3 bin/usage.py 或重新掃描即可。";
   }
 
   // ---------------------------------------------------------------- 總覽
@@ -49,7 +68,7 @@
     const s = state.data.stats;
     const cells = [
       [s.rules, "條規則", "rules"], [s.skills, "個技能", "skills"], [s.projects, "個專案", "projects"],
-      [s.shared, "個跨工具共用", "shared"], [s.installedTools, `/ ${state.data.tools.length} 個工具`, "tools"], [s.pending, "筆待補摘要", "pending"],
+      [s.shared, "個跨工具共用", "shared"], [s.unused90 ?? "—", `個技能 ${state.data.usageWindowDays || 90} 天未用`, "unused"], [s.pending, "筆待補摘要", "pending"],
     ];
     $("#stats").replaceChildren(...cells.map(([n, l]) => h("div", { class: "stat" }, h("div", { class: "stat__n" }, n), h("div", { class: "stat__l" }, l))));
   }
@@ -91,6 +110,9 @@
 
   function bindToolbar() {
     $("#search").addEventListener("input", (e) => { state.q = e.target.value.trim().toLowerCase(); renderTool(); });
+    $("#sort").addEventListener("change", (e) => { state.sort = e.target.value; renderTool(); });
+    $("#modalCancel").addEventListener("click", closeModal);
+    $("#modalScrim").addEventListener("click", closeModal);
     $("#filters").addEventListener("click", (e) => {
       const b = e.target.closest(".chip"); if (!b) return;
       state.filter = b.dataset.filter;
@@ -111,6 +133,7 @@
     if (f === "shared" && item.tools.length < 2) return false;
     if (f === "user" && item.source !== "user") return false;
     if (f === "plugin" && !["plugin", "builtin", "bundled"].includes(item.source)) return false;
+    if (f === "unused" && !(item.kind === "skill" && isStale(item.usage))) return false;
     if (state.q) {
       const hay = `${item.name} ${item.summary} ${item.description} ${item.path} ${item.tag || ""} ${item.project || ""}`.toLowerCase();
       if (!hay.includes(state.q)) return false;
@@ -125,7 +148,7 @@
     root.style.setProperty("--tool", t.color);
     document.documentElement.style.setProperty("--tool", t.color);
     const items = state.data.items;
-    const pick = (ids) => ids.map((id) => items[id]).filter(visible);
+    const pick = (ids) => sortItems(ids.map((id) => items[id]).filter(visible));
 
     const head = h("div", { class: "tool__head" },
       h("h2", { class: "tool__name" }, h("span", { class: "dot", style: `--c:${t.color}` }), t.name),
@@ -145,6 +168,24 @@
       section("04", "專案技能", projS.reduce((a, p) => a + p.list.length, 0), projects(projS), "掃描的專案裡沒有這個工具會讀的技能。"));
   }
 
+  function sortItems(list) {
+    if (state.sort === "recent") return list.sort((a, b) => (b.usage?.lastUsed || "").localeCompare(a.usage?.lastUsed || "") || a.name.localeCompare(b.name));
+    if (state.sort === "count") return list.sort((a, b) => (b.usage?.count || 0) - (a.usage?.count || 0) || a.name.localeCompare(b.name));
+    return list;
+  }
+  function isStale(u) { return !u || !u.lastUsed || (Date.now() - new Date(u.lastUsed).getTime()) > staleMs(); }
+  function ago(iso) {
+    if (!iso) return "";
+    const d = Math.floor((Date.now() - new Date(iso).getTime()) / DAY);
+    return d <= 0 ? "今天" : d === 1 ? "昨天" : d < 30 ? `${d} 天前` : d < 365 ? `${Math.floor(d / 30)} 個月前` : `${Math.floor(d / 365)} 年前`;
+  }
+  function usageLine(u, fallbackIso, cls = "card__use") {
+    if (u && u.count) {
+      const dots = state.data.tools.filter((t) => u.byTool[t.id]).map((t) => h("span", { class: "dot", style: `--c:${t.color}`, title: `${t.name} ${u.byTool[t.id].count} 次` }));
+      return h("div", { class: `${cls} ${isStale(u) ? "is-stale" : ""}` }, `上次使用 ${ago(u.lastUsed)} · ${u.count} 次`, h("span", { class: "shared" }, dots));
+    }
+    return h("div", { class: `${cls} is-none` }, `無使用紀錄${fallbackIso ? " · 最後修改 " + ago(fallbackIso) : ""}`);
+  }
   function section(num, title, count, body, empty) {
     return h("section", { class: "section" },
       h("div", { class: "section__head" }, h("span", { class: "section__num" }, num), h("h3", { class: "section__title" }, title), h("span", { class: "section__count" }, count)),
@@ -159,6 +200,7 @@
           h("button", { class: "project__name", onclick: () => meta && openProject(meta) }, p.name),
           h("span", { class: "project__path" }, p.path)),
         h("p", { class: `project__sum ${meta?.summary ? "" : "is-pending"}` }, meta?.summary || "尚未撰寫這個專案的目的摘要"),
+        meta && usageLine(meta.usage, meta.gitLastCommit, "project__use"),
         grid(p.list));
     }));
   }
@@ -171,12 +213,14 @@
       h("div", { class: "d-h" }, "在這個專案裡讀規則或技能的工具"),
       h("ul", { class: "d-paths" }, tools.map((t) => h("li", {}, h("span", { class: "who" }, h("span", { class: "dot", style: `--c:${t.color}` }), t.name), h("span", {}, "")))),
       h("div", { class: "d-h" }, "數量"),
-      h("div", { class: "d-meta" }, h("div", {}, h("b", {}, "規則"), meta.rules), h("div", {}, h("b", {}, "技能"), meta.skills)),
+      h("div", { class: "d-meta" }, h("div", {}, h("b", {}, "規則"), meta.rules), h("div", {}, h("b", {}, "技能"), meta.skills), h("div", {}, h("b", {}, "git 最後 commit"), meta.gitLastCommit ? fmtTime(meta.gitLastCommit) : "不是 git 倉庫")),
+      usageBlock(meta.usage),
       h("div", { class: "d-actions" },
         h("button", { class: "btn btn--primary", onclick: (e) => openWith(meta.id, "reveal", e.target) }, isMac() ? "在 Finder 顯示" : "在檔案總管顯示"),
         h("button", { class: "btn", onclick: (e) => openWith(meta.id, "vscode", e.target) }, "VS Code"),
         h("button", { class: "btn", onclick: (e) => openWith(meta.id, "cursor", e.target) }, "Cursor"),
-        h("button", { class: "btn", onclick: (e) => copy(meta.realPath || meta.path, e.target) }, "複製路徑"))));
+        h("button", { class: "btn", onclick: (e) => copy(meta.realPath || meta.path, e.target) }, "複製路徑"),
+        h("button", { class: "btn btn--danger", onclick: () => confirmDelete(meta, "project") }, "刪除專案…"))));
     $("#drawer").setAttribute("aria-hidden", "false");
     document.body.style.overflow = "hidden";
   }
@@ -186,6 +230,7 @@
     return h("button", { class: `card card--${it.kind}`, style: `--i:${Math.min(i, 24)}`, onclick: () => openDrawer(it) },
       h("div", { class: "card__top" }, h("div", { class: "card__name" }, it.name), h("span", { class: "card__kind" }, it.tag ? it.tag.replace(/^plugin:/, "") : KIND[it.kind])),
       h("div", { class: `card__sum ${it.summarySource === "pending" ? "is-pending" : ""}` }, it.summary || "尚未撰寫摘要"),
+      it.kind === "skill" && usageLine(it.usage, it.updatedAt),
       h("div", { class: "card__foot" },
         h("div", { class: "tags" }, it.source !== "user" && h("span", { class: `tag tag--${it.source}` }, SOURCE[it.source] || it.source), it.isSymlink && h("span", { class: "tag" }, "symlink")),
         shared && sharedDots(it)));
@@ -212,6 +257,7 @@
       it.imports?.length ? [h("div", { class: "d-h" }, "引用"), h("div", { class: "d-desc mono" }, it.imports.join("、"))] : null,
       it.kind !== "note" && [h("div", { class: "d-h" }, `讀取這個檔案的工具（${tools.length}）`),
         h("ul", { class: "d-paths" }, tools.map((t) => h("li", {}, h("span", { class: "who" }, h("span", { class: "dot", style: `--c:${t.color}` }), t.name), h("code", {}, it.paths?.[t.id] || it.path))))],
+      it.kind === "skill" && usageBlock(it.usage),
       it.kind !== "note" && [h("div", { class: "d-h" }, "檔案"),
         h("div", { class: "d-meta" },
           h("div", {}, h("b", {}, "實體路徑"), h("code", {}, it.realPath)),
@@ -223,11 +269,74 @@
         h("button", { class: "btn", onclick: (e) => openWith(it.id, "reveal", e.target) }, isMac() ? "在 Finder 顯示" : "在檔案總管顯示"),
         h("button", { class: "btn", onclick: (e) => openWith(it.id, "vscode", e.target) }, "VS Code"),
         h("button", { class: "btn", onclick: (e) => openWith(it.id, "cursor", e.target) }, "Cursor"),
-        h("button", { class: "btn", onclick: (e) => copy(abs, e.target) }, "複製路徑"))));
+        h("button", { class: "btn", onclick: (e) => copy(abs, e.target) }, "複製路徑"),
+        h("button", { class: "btn btn--danger", onclick: () => confirmDelete(it, "item") }, "刪除…"))));
     $("#drawer").setAttribute("aria-hidden", "false");
     document.body.style.overflow = "hidden";
   }
   function closeDrawer() { $("#drawer").setAttribute("aria-hidden", "true"); document.body.style.overflow = ""; }
+  function usageBlock(u) {
+    const src = state.data.usageSources || {};
+    if (!u || !u.count) return [h("div", { class: "d-h" }, "使用紀錄"), h("div", { class: "d-desc" }, "沒有在任何 agent 的紀錄裡找到使用痕跡。")];
+    const rows = state.data.tools.filter((t) => u.byTool[t.id]).map((t) =>
+      h("li", {}, h("span", { class: "who" }, h("span", { class: "dot", style: `--c:${t.color}` }), t.name), h("span", { class: "n" }, `${u.byTool[t.id].count} 次 · 上次 ${fmtTime(u.byTool[t.id].last)}`)));
+    const silent = state.data.tools.filter((t) => t.installed && !src[t.id]?.available).map((t) => t.name);
+    return [h("div", { class: "d-h" }, `使用紀錄（共 ${u.count} 次，上次 ${ago(u.lastUsed)}）`), h("ul", { class: "d-usage" }, rows),
+      silent.length && h("div", { class: "d-src", style: "margin:8px 0 0" }, `${silent.join("、")} 沒有可讀的使用紀錄，不代表沒用過。`)];
+  }
+
+  // ---------------------------------------------------------------- 刪除（移到垃圾桶）
+  function confirmDelete(rec, kind) {
+    const body = $("#modalBody"), ok = $("#modalConfirm");
+    ok.disabled = true; ok.textContent = "移到垃圾桶";
+    const isProject = kind === "project";
+    const shared = !isProject && rec.tools.length > 1;
+    const needType = isProject || shared;
+    const toolNames = state.data.tools.filter((t) => (rec.tools || []).includes(t.id)).map((t) => t.name);
+    body.replaceChildren(h("p", {}, "正在讀取實際會刪除的路徑…"));
+    $("#modal").setAttribute("aria-hidden", "false");
+    fetch(`../api/info?id=${encodeURIComponent(rec.id)}`).then((r) => r.json()).then((info) => {
+      if (!info.ok) { body.replaceChildren(h("p", {}, info.error || "讀取失敗")); return; }
+      let includeTarget = true;
+      const list = () => h("ul", {}, info.targets.filter((t) => includeTarget || t.symlink).map((t) =>
+        h("li", {}, h("span", { class: `tag ${t.symlink ? "tag--compat" : ""}` }, t.symlink ? "連結" : t.isDir ? "資料夾" : "檔案"), h("code", {}, t.path), !t.exists && h("span", { class: "tag" }, "已不存在"))));
+      const listWrap = h("div", {}, list());
+      const input = h("input", { class: "modal__input", placeholder: `輸入「${rec.name}」以確認`, autocomplete: "off" });
+      input.addEventListener("input", () => { ok.disabled = input.value.trim() !== rec.name; });
+      const check = h("label", { class: "modal__check" }, h("input", { type: "checkbox", checked: true, onchange: (e) => { includeTarget = e.target.checked; listWrap.replaceChildren(list()); } }),
+        "連同實體檔案一起移到垃圾桶（取消勾選則只移除連結，其他工具仍保有這個技能）");
+      const hasLink = info.targets.some((t) => t.symlink);
+      body.replaceChildren(h("div", {},  // 包一層 h()，條件式產生的 false / null 才不會被當成文字
+        h("p", {}, isProject ? "將把整個專案資料夾移到垃圾桶：" : `將把這個${rec.kind === "rule" ? "規則檔" : "技能"}移到垃圾桶：`, h("strong", {}, ` ${rec.name}`)),
+        listWrap,
+        isProject && info.info && h("p", { class: "mono", style: "font-size:12px" }, `共 ${info.info.files}${info.info.capped ? "+" : ""} 個檔案，${fmtSize(info.info.bytes)}`),
+        shared && h("div", { class: "modal__warn" }, `這個項目同時被 ${toolNames.join("、")} 使用，刪除實體後這些工具都會失去它。`),
+        hasLink && !isProject && check,
+        h("div", { class: "modal__warn" }, "會移到系統垃圾桶，可從垃圾桶救回。刪除後會自動重新掃描。"),
+        needType ? input : h("p", { style: "font-size:12.5px;color:var(--ink-3)" }, "按下按鈕即執行。")));
+      if (!needType) ok.disabled = false;
+      ok.onclick = () => doDelete(rec, includeTarget, needType ? input.value : rec.name);
+      if (needType) input.focus();
+    }).catch(() => body.replaceChildren(h("p", {}, "連不到 serve.py，無法刪除。")));
+  }
+  function doDelete(rec, includeTarget, confirm) {
+    const ok = $("#modalConfirm"); ok.disabled = true; ok.textContent = "處理中…";
+    fetch("../api/delete", { method: "POST", headers: { "Content-Type": "application/json", "X-Requested-With": "agent-inventory" },
+      body: JSON.stringify({ id: rec.id, includeTarget, confirm }) })
+      .then((r) => r.json()).then((res) => {
+        closeModal(); closeDrawer();
+        const done = (res.results || []).filter((x) => x.ok).length, failed = (res.results || []).filter((x) => !x.ok);
+        toast(res.ok ? `已移到垃圾桶（${done} 個路徑），畫面已更新。` : `部分失敗：${failed.map((f) => f.path + "：" + f.message).join("；") || res.error}`);
+        return reload();
+      }).catch((e) => { toast("刪除失敗：" + e.message); ok.disabled = false; ok.textContent = "移到垃圾桶"; });
+  }
+  function closeModal() { $("#modal").setAttribute("aria-hidden", "true"); }
+  function toast(msg) {
+    let el = $("#toast");
+    if (!el) { el = h("div", { id: "toast", class: "toast" }); document.body.append(el); }
+    el.textContent = msg; el.classList.add("is-on");
+    clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove("is-on"), 5000);
+  }
   function copy(text, btn) {
     navigator.clipboard?.writeText(expandHome(text)).then(() => { const o = btn.textContent; btn.textContent = "已複製"; setTimeout(() => (btn.textContent = o), 1200); });
   }

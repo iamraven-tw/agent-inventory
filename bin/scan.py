@@ -21,8 +21,10 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "bin"))
 
 import adapters  # noqa: E402
+import usage as usage_mod  # noqa: E402  (bin/usage.py, same directory)
 from adapters.base import (  # noqa: E402
     HOME, SKIP_DIRS, content_hash, display_path, expand, find_skill_files, iso_mtime,
     parse_frontmatter, path_id, resolve_rule_entry,
@@ -53,6 +55,7 @@ def load_config(args) -> dict:
     cfg.setdefault("scanDepth", 4)
     cfg.setdefault("exclude", DEFAULT_EXCLUDE)
     cfg.setdefault("language", "zh-TW")
+    cfg.setdefault("pathAliases", [])
     if not cfg["projectRoots"] and not CONFIG_PATH.is_file():
         print("尚未設定。請先執行 inventory-setup 技能，或用 --roots 指定專案根目錄。", file=sys.stderr)
     return cfg
@@ -280,11 +283,83 @@ def discover_projects(roots: list[str], depth: int, markers: set[str], exclude: 
     return found
 
 
+# ---------------------------------------------------------------- usage attribution
+
+USAGE_WINDOW_DAYS = 90
+
+
+def _merge_usage(target: dict, tool: str, rec: dict):
+    bt = target["byTool"].setdefault(tool, {"count": 0, "last": ""})
+    bt["count"] += rec.get("count", 0)
+    if rec.get("last", "") > bt["last"]:
+        bt["last"] = rec["last"]
+    target["count"] += rec.get("count", 0)
+    if rec.get("last", "") > (target["lastUsed"] or ""):
+        target["lastUsed"] = rec["last"]
+
+
+def _empty_usage() -> dict:
+    return {"count": 0, "lastUsed": "", "byTool": {}, "source": "none"}
+
+
+def git_last_commit(path: Path) -> str:
+    """ISO date of the last commit touching this directory, or '' when not a git repo."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", str(path), "log", "-1", "--format=%cI", "--", "."],
+                           capture_output=True, text=True, timeout=3)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except (subprocess.TimeoutExpired, OSError):
+        return ""
+
+
+def attach_usage(inv: "Inventory", usage: dict, aliases: list | None = None):
+    """Match usage.json events to items (by skill name) and projects (by cwd prefix).
+
+    aliases: [[old_prefix, new_prefix], ...] from config.pathAliases — lets logs that still point at a folder's
+    old location (a moved workspace, a cloud-sync path) count toward the project at its current path.
+    """
+    skills_u = usage.get("skills", {})
+    alias_pairs = [(str(expand(a)).rstrip("/"), str(expand(b)).rstrip("/")) for a, b in (aliases or []) if a and b]
+    for it in inv.items.values():
+        u = _empty_usage()
+        if it["kind"] == "skill":
+            names = {it["name"], Path(expand(it["realPath"])).parent.name}
+            for tool in it["tools"]:
+                for n in names:
+                    rec = skills_u.get(n, {}).get(tool)
+                    if rec:
+                        _merge_usage(u, tool, rec)
+        u["source"] = "log" if u["count"] else "none"
+        it["usage"] = u
+
+    projs = sorted(((str(expand(p["realPath"]).resolve()), pid) for pid, p in inv.projects.items()), key=lambda x: -len(x[0]))
+    for pid, p in inv.projects.items():
+        p["usage"] = _empty_usage()
+        p["gitLastCommit"] = git_last_commit(expand(p["realPath"]))
+    for cwd, by_tool in usage.get("cwds", {}).items():
+        for old, new in alias_pairs:
+            if cwd == old or cwd.startswith(old + "/"):
+                cwd = new + cwd[len(old):]
+                break
+        try:
+            real = str(Path(cwd).resolve())
+        except OSError:
+            real = cwd
+        for proot, pid in projs:  # deepest project first
+            if real == proot or real.startswith(proot + "/"):
+                for tool, rec in by_tool.items():
+                    _merge_usage(inv.projects[pid]["usage"], tool, rec)
+                break
+    for p in inv.projects.values():
+        p["usage"]["source"] = "log" if p["usage"]["count"] else "none"
+
+
 def tool_installed(spec: dict) -> bool:
     return any(expand(p).exists() for p in spec.get("detect", []))
 
 
-def run(cfg: dict) -> dict:
+def run(cfg: dict, usage: dict | None = None) -> dict:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     cache_path = DATA_DIR / "summary-cache.json"
     cache = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.is_file() else {}
@@ -331,7 +406,10 @@ def run(cfg: dict) -> dict:
             "projects": proj_out,
         })
 
+    attach_usage(inv, usage or {}, cfg.get("pathAliases"))
+    cutoff = (datetime.now().astimezone() - __import__("datetime").timedelta(days=USAGE_WINDOW_DAYS)).isoformat(timespec="seconds")
     stats = {
+        "unused90": sum(1 for i in inv.items.values() if i["kind"] == "skill" and (i["usage"]["lastUsed"] or "") < cutoff),
         "rules": sum(1 for i in inv.items.values() if i["kind"] == "rule"),
         "skills": sum(1 for i in inv.items.values() if i["kind"] == "skill"),
         "projects": len(inv.projects),
@@ -345,6 +423,9 @@ def run(cfg: dict) -> dict:
         "home": str(HOME),
         "config": {"projectRoots": cfg["projectRoots"], "scanDepth": cfg["scanDepth"], "tools": cfg["tools"]},
         "stats": stats,
+        "usageSources": (usage or {}).get("sources", {}),
+        "usageGeneratedAt": (usage or {}).get("generatedAt", ""),
+        "usageWindowDays": USAGE_WINDOW_DAYS,
         "tools": tools_out,
         "projects": inv.projects,
         "items": inv.items,
@@ -358,16 +439,22 @@ def main():
     ap.add_argument("--tools", help="comma-separated tool ids (overrides config)")
     ap.add_argument("--depth", type=int, help="project scan depth (overrides config)")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--no-usage", action="store_true", help="skip collecting usage logs (reuse data/usage.json if present)")
     args = ap.parse_args()
     cfg = load_config(args)
-    result = run(cfg)
+    usage_path = DATA_DIR / "usage.json"
+    if args.no_usage:
+        usage = json.loads(usage_path.read_text(encoding="utf-8")) if usage_path.is_file() else {}
+    else:
+        usage = usage_mod.collect(cfg["tools"])
+    result = run(cfg, usage)
     pending = result.pop("_pending")
     (DATA_DIR / "inventory.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
     (DATA_DIR / "pending-summaries.json").write_text(json.dumps(pending, ensure_ascii=False, indent=1), encoding="utf-8")
     if not args.quiet:
         s = result["stats"]
         print(f"掃描完成 → {display_path(DATA_DIR / 'inventory.json')}")
-        print(f"  規則 {s['rules']}｜技能 {s['skills']}｜專案 {s['projects']}｜跨工具共用 {s['shared']}｜待補摘要 {s['pending']}")
+        print(f"  規則 {s['rules']}｜技能 {s['skills']}｜專案 {s['projects']}｜跨工具共用 {s['shared']}｜待補摘要 {s['pending']}｜{USAGE_WINDOW_DAYS} 天未用技能 {s['unused90']}")
         for t in result["tools"]:
             flag = "✓" if t["installed"] else "✗ 未偵測到"
             print(f"  {t['name']:<22} {flag:<8} 全域規則 {len(t['global']['rules']):>3}  全域技能 {len(t['global']['skills']):>3}  "

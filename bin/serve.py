@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import subprocess
 import sys
@@ -71,9 +72,155 @@ def open_with(path: Path, how: str) -> tuple[bool, str]:
         return False, str(e)
 
 
+def load_inventory() -> dict:
+    try:
+        return json.loads((DATA / "inventory.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def expand_home(raw: str) -> Path:
+    return Path(raw.replace("~", str(Path.home()), 1) if raw.startswith("~") else raw)
+
+
+def send_to_trash(path: Path) -> tuple[bool, str]:
+    """Move a file or directory to the OS trash (reversible). Symlinks are unlinked, never followed."""
+    system = platform.system()
+    try:
+        if path.is_symlink():
+            path.unlink()
+            return True, "unlinked"
+        if not path.exists():
+            return False, "不存在"
+        if system == "Darwin":
+            script = f'tell application "Finder" to delete POSIX file "{str(path).replace(chr(34), chr(92) + chr(34))}"'
+            r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=30)
+            return (r.returncode == 0), (r.stderr.strip() or "trashed")
+        if system == "Windows":
+            kind = "DeleteDirectory" if path.is_dir() else "DeleteFile"
+            ps = (f"Add-Type -AssemblyName Microsoft.VisualBasic; "
+                  f"[Microsoft.VisualBasic.FileIO.FileSystem]::{kind}('{str(path).replace(chr(39), chr(39) * 2)}', 'OnlyErrorDialogs', 'SendToRecycleBin')")
+            r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=30)
+            return (r.returncode == 0), (r.stderr.strip() or "recycled")
+        r = subprocess.run(["gio", "trash", str(path)], capture_output=True, text=True, timeout=30)
+        return (r.returncode == 0), (r.stderr.strip() or "trashed")
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, str(e)
+
+
+def delete_targets(rec: dict, kind: str, include_target: bool) -> list[Path]:
+    """All filesystem paths a delete should touch: every tool's link/path, plus the real target when requested."""
+    seen: list[Path] = []
+
+    def add(p: Path):
+        if p not in seen:
+            seen.append(p)
+
+    if kind == "project":
+        add(expand_home(rec.get("realPath") or rec["path"]))
+        return seen
+    paths = list((rec.get("paths") or {}).values()) or [rec["path"]]
+    candidates: list[Path] = []
+    for raw in paths:
+        p = expand_home(raw)
+        candidates.append(p.parent if rec["kind"] == "skill" else p)  # a skill is its folder; a rule is the file
+    real = None
+    if rec.get("realPath"):
+        rp = expand_home(rec["realPath"])
+        real = (rp.parent if rec["kind"] == "skill" else rp).resolve()
+    # Three ways to reach the same thing: (a) the item itself is a symlink → unlink it; (b) the real path → trash once;
+    # (c) a path that merely goes through a symlinked parent (e.g. .claude/skills -> ../.agents/skills) → same object as (b), skip.
+    for c in candidates:
+        if c.is_symlink():
+            add(c)
+    if include_target and real is not None:
+        add(real)
+    elif not include_target and real is not None and not any(c.is_symlink() for c in candidates):
+        add(real)  # nothing to unlink, the only thing that exists is the real file
+    return seen
+
+
+def rescan():
+    """Re-run the scanner in-process so the site reflects the deletion immediately."""
+    sys.path.insert(0, str(REPO / "bin"))
+    import scan  # noqa: WPS433
+    cfg = scan.load_config(type("A", (), {"roots": None, "tools": None, "depth": None})())
+    usage_path = DATA / "usage.json"
+    usage = json.loads(usage_path.read_text(encoding="utf-8")) if usage_path.is_file() else {}
+    result = scan.run(cfg, usage)
+    pending = result.pop("_pending")
+    (DATA / "inventory.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
+    (DATA / "pending-summaries.json").write_text(json.dumps(pending, ensure_ascii=False, indent=1), encoding="utf-8")
+    return result["stats"]
+
+
+def folder_info(path: Path, cap: int = 200000) -> dict:
+    files, size = 0, 0
+    for root, dirs, names in os.walk(path):
+        dirs[:] = [d for d in dirs if d not in (".git", "node_modules")]
+        for n in names:
+            files += 1
+            try:
+                size += (Path(root) / n).stat().st_size
+            except OSError:
+                pass
+            if files >= cap:
+                return {"files": files, "bytes": size, "capped": True}
+    return {"files": files, "bytes": size, "capped": False}
+
+
 class Handler(SimpleHTTPRequestHandler):
+    def do_OPTIONS(self):  # no CORS headers → cross-origin pages cannot call the mutating endpoints
+        self.send_response(403)
+        self.end_headers()
+
+    def do_POST(self):
+        u = urlparse(self.path)
+        if u.path != "/api/delete":
+            return self._json(404, {"ok": False, "error": "not found"})
+        if self.headers.get("X-Requested-With") != "agent-inventory" or "application/json" not in (self.headers.get("Content-Type") or ""):
+            return self._json(400, {"ok": False, "error": "缺少必要標頭"})
+        try:
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        except (ValueError, json.JSONDecodeError):
+            return self._json(400, {"ok": False, "error": "JSON 格式錯誤"})
+        inv = load_inventory()
+        item_id = str(body.get("id", ""))
+        rec = inv.get("items", {}).get(item_id)
+        kind = "item"
+        if rec is None:
+            rec = inv.get("projects", {}).get(item_id)
+            kind = "project"
+        if rec is None or rec.get("kind") == "note":
+            return self._json(404, {"ok": False, "error": "找不到這個項目"})
+        if str(body.get("confirm", "")).strip() != rec["name"]:
+            return self._json(400, {"ok": False, "error": "確認名稱不符，未刪除"})
+        targets = delete_targets(rec, kind, bool(body.get("includeTarget", True)))
+        results = []
+        for p in targets:
+            ok, msg = send_to_trash(p)
+            results.append({"path": str(p), "ok": ok, "message": msg})
+        try:
+            stats = rescan()
+        except Exception as e:  # deletion happened; report even if rescan failed
+            stats = {"error": str(e)}
+        return self._json(200, {"ok": all(r["ok"] for r in results), "results": results, "stats": stats})
+
     def do_GET(self):
         u = urlparse(self.path)
+        if u.path == "/api/info":
+            q = parse_qs(u.query)
+            inv = load_inventory()
+            item_id = q.get("id", [""])[0]
+            rec = inv.get("items", {}).get(item_id) or inv.get("projects", {}).get(item_id)
+            if not rec:
+                return self._json(404, {"ok": False, "error": "找不到這個項目"})
+            kind = "project" if item_id.startswith("proj-") else "item"
+            targets = delete_targets(rec, kind, True)
+            out = {"ok": True, "targets": [{"path": str(p), "symlink": p.is_symlink(), "isDir": p.is_dir(), "exists": p.exists() or p.is_symlink()} for p in targets]}
+            if kind == "project":
+                out["info"] = folder_info(expand_home(rec.get("realPath") or rec["path"]))
+            return self._json(200, out)
         if u.path == "/api/open":
             q = parse_qs(u.query)
             item_id, how = q.get("id", [""])[0], q.get("with", ["editor"])[0]
