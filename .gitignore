@@ -7,3 +7,6 @@ __pycache__/
 
 # 本機規劃書，不公開
 PLAN.md
+
+# 技能備份的本機設定（範例見 config/backup_skills.example.json）
+config/backup_skills.json

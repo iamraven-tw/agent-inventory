@@ -1,0 +1,17 @@
+{
+  "_comment": "複製成 ~/.config/agent-inventory/backup_skills.json（或 repo 內 config/backup_skills.json，已 gitignore），或用環境變數 AGENT_INVENTORY_BACKUP_CONFIG 指向這份 JSON。路徑一律是技能資料夾內的相對路徑；程式內建的預設清單會自動合併，設 useDefaults=false 可停用。",
+  "useDefaults": true,
+  "allowedTestValues": [
+    {
+      "skill": "example-skill",
+      "path": "tests/fixtures/sample.test.mjs",
+      "value": "placeholder-value"
+    }
+  ],
+  "excludedDirs": [
+    {
+      "skill": "example-skill",
+      "path": ".cache-downloads"
+    }
+  ]
+}
